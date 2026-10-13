@@ -40,8 +40,13 @@ test('MCP: setup, quiet order, ask-first via the device prompt, refusal, store d
     assert.deepStrictEqual(tools, ['change_promise', 'finish_setup', 'place_order', 'read_promises', 'send_message', 'start_setup', 'what_did_you_do']);
     assert.ok(!tools.some(t => /confirm|approve|owner|token/.test(t)), 'the assistant has no tool that says yes');
 
+    assert.match(await h.call('finish_setup', { home_type: 'family', ask_first_amount: 'one million' }), /nothing is set up/, 'no answer: setup does not happen');
+    assert.strictEqual(home.gate, null);
+    h.answers.push(true);
     const setup = await h.call('finish_setup', { home_type: 'family', ask_first_amount: 'seventy five dollars', allergies: 'peanuts and tree nuts', trusted_contacts: 'mom' });
     assert.match(setup, /always ask before spending more than \$75\.00/);
+    assert.match(h.asked[1], /Shall I keep these promises/, 'the household heard the promises read back first');
+    h.asked.length = 0;
 
     assert.strictEqual(await h.call('place_order', { item: 'oat milk', quantity: 1 }), 'Done.');
     assert.strictEqual(home.sent[0].unitCents, 1899, 'price came from the store, not the assistant');
@@ -92,7 +97,9 @@ test('a host that cannot ask the person: ask-first actions go to the decision-ma
   const { home, srv, base } = await start();
   const h = await connect(base, { canAsk: false });
   try {
-    await h.call('finish_setup', { home_type: 'family', ask_first_amount: '75' });
+    assert.match(await h.call('finish_setup', { home_type: 'family', ask_first_amount: '75' }), /sent your home setup/);
+    assert.strictEqual(home.gate, null, 'the assistant cannot set up the home alone');
+    assert.strictEqual((await ownerPost(base, '/owner/approve-setup')).status, 'applied');
     assert.match(await h.call('place_order', { item: 'air fryer' }), /sent that to the person who runs your home/);
     assert.strictEqual(home.sent.length, 0);
     for (const name of ['confirm_action', 'approve', 'owner_approve']) { // nothing the assistant can call says yes
@@ -105,6 +112,22 @@ test('a host that cannot ask the person: ask-first actions go to the decision-ma
     const r = await ownerPost(base, '/owner/approve/' + pend.actions[0].id);
     assert.strictEqual(r.status, 'executed'); assert.strictEqual(home.sent.length, 1);
     assert.strictEqual(home.log.entries().find(e => e.approval === 'yes').approver, 'decision-maker (phone)');
+  } finally { await h.client.close(); srv.close(); }
+});
+
+test('splitting a big order into small ones still gets asked', async () => {
+  const { home, srv, base } = await start();
+  const h = await connect(base, { canAsk: true, answers: [true] });
+  try {
+    await h.call('finish_setup', { home_type: 'family', ask_first_amount: '75' });
+    h.asked.length = 0;
+    for (let i = 0; i < 3; i++) assert.match(await h.call('place_order', { item: 'paper towels' }), /Done/); // 3 x $24.99 = $74.97
+    assert.strictEqual(h.asked.length, 0);
+    assert.match(await h.call('place_order', { item: 'paper towels' }), /Okay, I won't/); // 4th would make $99.96: asked, no answer
+    assert.match(h.asked[0], /together with today's other orders it comes to \$99\.96/);
+    assert.strictEqual(home.sent.length, 3);
+    for (const r of home.log.entries().filter(e => e.type === 'decision'))
+      assert.ok(require('../src/receipts').replay(r, home.gate.versions).ok, 'replays with the recorded day total');
   } finally { await h.client.close(); srv.close(); }
 });
 

@@ -29,7 +29,7 @@ class ReceiptLog {
 function replay(receipt, constitutionsByHash) {
   const c = constitutionsByHash[receipt.constitutionHash];
   if (!c) return { ok: false, why: 'constitution version not found' };
-  const ev = evaluate(receipt.contract, c);
+  const ev = evaluate(receipt.contract, c, { recentCents: receipt.recentCents || 0 });
   return { ok: ev.tier === receipt.tier, recordedTier: receipt.tier, replayedTier: ev.tier };
 }
 

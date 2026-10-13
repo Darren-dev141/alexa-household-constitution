@@ -24,14 +24,23 @@ class Gate {
       mac: crypto.createHmac('sha256', this.key).update(msg).digest('hex') };
   }
 
+  // Orders let through without asking in the last 24h. Counted at decision time,
+  // so it errs toward asking (an allowed order whose checkout was stopped still counts).
+  recentUnaskedSpend() {
+    const cutoff = this.now() - 24 * 3600_000;
+    return this.log.entries().filter(e => e.type === 'decision' && e.approval === 'auto' && e.decision === 'allowed'
+      && e.contract.kind === 'order' && Date.parse(e.ts) >= cutoff).reduce((a, e) => a + e.contract.totalCents, 0);
+  }
+
   // Agent proposes. Returns what Alexa should do next.
   propose(proposal) {
     const t0 = process.hrtime.bigint();
     const contract = toContract(proposal), contractHash = hashOf(contract);
-    const ev = evaluate(contract, this.constitution);
+    const recentCents = contract.kind === 'order' ? this.recentUnaskedSpend() : 0;
+    const ev = evaluate(contract, this.constitution, { recentCents });
     const latencyMs = Number(process.hrtime.bigint() - t0) / 1e6;
     const base = { type: 'decision', constitutionVersion: this.constitution.version,
-      constitutionHash: this.constitution.hash, contract, contractHash, tier: ev.tier,
+      constitutionHash: this.constitution.hash, contract, contractHash, tier: ev.tier, recentCents,
       rules: ev.reasons.map(r => r.rule), latencyUs: Math.round(latencyMs * 1000) };
     if (ev.tier === TIER.REFUSE) {
       const r = this.log.append({ ...base, decision: 'refused', approval: null, approver: 'household rules' });

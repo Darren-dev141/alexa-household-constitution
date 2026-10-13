@@ -82,8 +82,21 @@ function buildMcp(home) {
       tell_after_amount: z.string().optional(), allergies: z.string().optional(), trusted_contacts: z.string().optional() } },
   async a => {
     if (home.gate) return text('Your home is already set up. You can change any promise just by asking.');
-    home.setup(a.home_type, { spendConfirmCents: a.ask_first_amount, notifyCents: a.tell_after_amount,
-      blockedAllergens: a.allergies, approvedContacts: a.trusted_contacts });
+    const answers = { spendConfirmCents: a.ask_first_amount, notifyCents: a.tell_after_amount,
+      blockedAllergens: a.allergies, approvedContacts: a.trusted_contacts };
+    const draft = setupConstitution(a.home_type, answers); // validates; nothing saved yet
+    // The household hears the promises read back and says yes; the assistant cannot set them up alone.
+    if (!s.server.getClientCapabilities()?.elicitation) {
+      home.pendingSetup = { starter: a.home_type, answers, at: home.now() };
+      return text("I've sent your home setup to the person who runs your home to okay.");
+    }
+    let answer;
+    try {
+      answer = await s.server.elicitInput({ message: `Here's what I'll promise your home. ${promisesText(draft)} Shall I keep these promises?`,
+        requestedSchema: { type: 'object', properties: { go_ahead: { type: 'boolean', title: 'Keep these promises?' } }, required: ['go_ahead'] } });
+    } catch { return text("I couldn't ask just now, so nothing was set up."); }
+    if (!(answer.action === 'accept' && answer.content?.go_ahead === true)) return text("Okay, nothing is set up yet. We can try again whenever you like.");
+    home.setup(a.home_type, answers);
     return text(`All set. ${promisesText(home.gate.constitution)} You can change any of this just by asking.`);
   });
 
@@ -148,7 +161,7 @@ function buildMcp(home) {
     annotations: { readOnlyHint: true } }, async () => {
     const es = home.log.entries();
     const done = es.filter(e => e.type === 'execution' && e.decision === 'executed').slice(-5)
-      .map(e => describe(e.contract));
+      .map(e => describe(e.contract).replace(/^order /, 'ordered ').replace(/^send /, 'sent '));
     const tips = tuningSuggestions(es).map(t => t.say);
     return text((done.length ? `Recently I: ${done.join('; ')}.` : "I haven't done anything yet.") + (tips.length ? ' ' + tips.join(' ') : ''));
   });
@@ -190,9 +203,19 @@ function createApp(opts) {
   app.get('/owner/pending', (req, res) => {
     if (!owner(req, res)) return;
     res.json({
+      setup: home.pendingSetup ? home.pendingSetup.answers : null,
       changes: [...home.amendments.entries()].map(([id, a]) => ({ id, changes: a.changes })),
       actions: [...home.heldActions.entries()].map(([id, h]) => ({ id, what: describe(h.contract) })),
     });
+  });
+  app.post('/owner/approve-setup', (req, res) => {
+    if (!owner(req, res)) return;
+    const p = home.pendingSetup;
+    if (!p || home.gate) return res.status(404).end();
+    home.pendingSetup = null;
+    if (home.now() - p.at > OWNER_WAIT_MS) return res.json({ status: 'expired' });
+    home.setup(p.starter, p.answers);
+    res.json({ status: 'applied', promises: promisesText(home.gate.constitution) });
   });
   app.post('/owner/approve/:id', (req, res) => {
     if (!owner(req, res)) return;

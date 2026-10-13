@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/slice.test.js test/mcp.test.js"
+    "test": "node --test test/slice.test.js test/mcp.test.js",
+    "demo": "node demo/run.js"
   },
   "keywords": [],
   "author": "",

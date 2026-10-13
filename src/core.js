@@ -84,8 +84,11 @@ function setupConstitution(starter, answers = {}) {
 // ---------- the three rules + tiers ----------
 // Tiers: 0 silent+log, 1 notify after, 2 spoken confirm before, 3 refuse.
 const TIER = { SILENT: 0, NOTIFY: 1, CONFIRM: 2, REFUSE: 3 };
-function evaluate(contract, constitution) {
+// ctx.recentCents: what was spent WITHOUT asking in the last 24h, so a big order
+// can't slip through split into small ones.
+function evaluate(contract, constitution, ctx = {}) {
   const P = constitution.params, reasons = [];
+  const recent = ctx.recentCents || 0;
   let tier = TIER.SILENT;
   const raise = (t, rule, say) => { reasons.push({ rule, say }); if (t > tier) tier = t; };
   if (contract.kind === 'order') {
@@ -95,6 +98,8 @@ function evaluate(contract, constitution) {
       raise(TIER.CONFIRM, 'substitution', `it is a substitute for what you asked for`);
     if (contract.totalCents > P.spendConfirmCents)
       raise(TIER.CONFIRM, 'spend', `it costs ${money(contract.totalCents)}, over your ${money(P.spendConfirmCents)} ask-first limit`);
+    else if (recent + contract.totalCents > P.spendConfirmCents)
+      raise(TIER.CONFIRM, 'spend', `together with today's other orders it comes to ${money(recent + contract.totalCents)}, over your ${money(P.spendConfirmCents)} ask-first limit`);
     else if (contract.totalCents > P.notifyCents)
       raise(TIER.NOTIFY, 'spend', `it costs ${money(contract.totalCents)}`);
   } else if (contract.kind === 'message') {
