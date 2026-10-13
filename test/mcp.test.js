@@ -137,6 +137,66 @@ test('a host that drops the session: requests still work, ask-first is held, nev
   } finally { srv.close(); }
 });
 
+test("decision-maker's phone page: plain words, no secrets, everything waiting is listed and decided there", async () => {
+  const { home, srv, base } = await start();
+  const h = await connect(base, { canAsk: false });
+  try {
+    const page = await fetch(base + '/owner');
+    assert.strictEqual(page.status, 200); assert.match(page.headers.get('content-type'), /html/);
+    assert.strictEqual(page.headers.get('x-frame-options'), 'DENY', 'cannot be framed to trick a tap');
+    assert.strictEqual(page.headers.get('cache-control'), 'no-store');
+    assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+    const html = await page.text();
+    assert.ok(!html.includes('owner-secret'), 'the page carries no code');
+    const visible = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/g, ' ');
+    assert.doesNotMatch(visible, /\brule|polic|setting|token|hash|constitution|elicit/i);
+    assert.strictEqual((await fetch(base + '/owner/pending')).status, 401);
+
+    await h.call('finish_setup', { home_type: 'family', ask_first_amount: '75', allergies: 'peanuts' });
+    let p = await ownerGet(base, '/owner/pending');
+    assert.match(p.setup.say, /ask before spending more than \$75\.00.*never bring peanuts/i);
+    assert.strictEqual((await ownerPost(base, '/owner/approve-setup')).status, 'applied');
+
+    await h.call('change_promise', { ask_first_amount: '200', allergies: 'none' });
+    await h.call('place_order', { item: 'air fryer' });
+    p = await ownerGet(base, '/owner/pending');
+    assert.strictEqual(p.changes[0].say, 'ask before spending more than $200.00; no foods are kept out of your home');
+    assert.match(p.actions[0].what, /air fryer for \$89\.99/);
+    for (const s of [p.changes[0].say, p.actions[0].what]) assert.doesNotMatch(s, /Cents|\{|rule|polic|setting/);
+    assert.strictEqual((await ownerPost(base, '/owner/decline/' + p.changes[0].id)).status, 'declined');
+    assert.strictEqual((await ownerPost(base, '/owner/approve/' + p.actions[0].id)).status, 'executed');
+    assert.match(await h.call('read_promises'), /\$75\.00.*peanuts/, 'declined change left the promises alone');
+    assert.strictEqual(home.sent.length, 1);
+
+    // A held order that waited past 30 minutes is no longer shown, and can't be approved.
+    await h.call('place_order', { item: 'air fryer' });
+    p = await ownerGet(base, '/owner/pending');
+    const late = p.actions[0].id;
+    home.heldActions.get(late).at -= 31 * 60_000;
+    assert.strictEqual((await ownerGet(base, '/owner/pending')).actions.length, 0);
+    assert.strictEqual((await ownerPost(base, '/owner/approve/' + late)).status, 'expired');
+    assert.strictEqual(home.sent.length, 1);
+
+    // Price changes between the hold and the parent's okay: stopped, nothing charged.
+    await h.call('place_order', { item: 'air fryer' });
+    p = await ownerGet(base, '/owner/pending');
+    home.vendor.setPrice('air-fryer', 10999);
+    const r = await ownerPost(base, '/owner/approve/' + p.actions[0].id);
+    assert.strictEqual(r.status, 'blocked'); assert.match(r.say, /stopped before paying/);
+    assert.strictEqual(home.sent.length, 1);
+  } finally { await h.client.close(); srv.close(); }
+});
+
+test('guessing the home code is throttled', async () => {
+  const { srv, base } = await start();
+  try {
+    const tryCode = c => fetch(base + '/owner/pending', { headers: { 'x-owner-key': c } }).then(r => r.status);
+    for (let i = 0; i < 5; i++) assert.strictEqual(await tryCode('guess' + i), 401);
+    assert.strictEqual(await tryCode('guess5'), 429);
+    assert.strictEqual(await tryCode('owner-secret'), 429, 'even the right code waits out the lockout');
+  } finally { srv.close(); }
+});
+
 test('splitting a big order into small ones still gets asked', async () => {
   const { home, srv, base } = await start();
   const h = await connect(base, { canAsk: true, answers: [true] });

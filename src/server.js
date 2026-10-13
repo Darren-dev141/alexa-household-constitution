@@ -15,6 +15,7 @@ const { z } = require('zod');
 const { setupConstitution, SETUP_QUESTIONS, STARTERS, money, describe, verifyConstitution, parseSpokenMoney, parseSpokenList } = require('./core');
 const OWNER_WAIT_MS = 30 * 60_000;
 const { SandboxVendor } = require('./vendor');
+const OWNER_PAGE = require('./owner-page');
 const { Gate, Executor } = require('./gate');
 const { ReceiptLog, tuningSuggestions } = require('./receipts');
 
@@ -202,18 +203,32 @@ function createApp(opts) {
   app.delete('/mcp', bySession);
 
   // Owner-only routes: stand-in for the decision-maker's phone. Not MCP tools.
+  // Wrong codes are throttled: after 5 misses in 15 minutes, the owner routes refuse for 15 minutes.
+  let misses = [];
   const owner = (req, res) => {
+    misses = misses.filter(t => home.now() - t < 15 * 60_000);
+    if (misses.length >= 5) { res.status(429).end(); return false; }
     const k = String(req.get('x-owner-key') || '');
     const ok = k.length === home.ownerKey.length && crypto.timingSafeEqual(Buffer.from(k), Buffer.from(home.ownerKey));
-    if (!ok) res.status(401).end();
+    if (!ok) { misses.push(home.now()); res.status(401).end(); }
     return ok;
   };
+  app.get('/owner', (req, res) => res.set({ 'X-Frame-Options': 'DENY', 'Cache-Control': 'no-store',
+    'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'" })
+    .type('html').send(OWNER_PAGE));
+  const fresh = at => home.now() - at <= OWNER_WAIT_MS;
+  const sayChanges = ch => Object.entries(ch).map(([k, v]) =>
+    k === 'spendConfirmCents' ? `ask before spending more than ${money(v)}`
+    : k === 'notifyCents' ? `tell you afterwards about anything over ${money(v)}`
+    : k === 'blockedAllergens' ? (v.length ? `never bring ${v.join(' or ')} into your home` : `no foods are kept out of your home`)
+    : `message ${v.length ? v.join(', ') : 'nobody'} without asking`).join('; ');
   app.get('/owner/pending', (req, res) => {
     if (!owner(req, res)) return;
-    res.json({
-      setup: home.pendingSetup ? home.pendingSetup.answers : null,
-      changes: [...home.amendments.entries()].map(([id, a]) => ({ id, changes: a.changes })),
-      actions: [...home.heldActions.entries()].map(([id, h]) => ({ id, what: describe(h.contract) })),
+    const ps = home.pendingSetup && fresh(home.pendingSetup.at) ? home.pendingSetup : null;
+    res.set('Cache-Control', 'no-store').json({
+      setup: ps ? { say: promisesText(setupConstitution(ps.starter, ps.answers)) } : null,
+      changes: [...home.amendments.entries()].filter(([, a]) => fresh(a.at)).map(([id, a]) => ({ id, say: sayChanges(a.changes), changes: a.changes })),
+      actions: [...home.heldActions.entries()].filter(([, h]) => fresh(h.at)).map(([id, h]) => ({ id, what: describe(h.contract) })),
     });
   });
   app.post('/owner/approve-setup', (req, res) => {
@@ -224,6 +239,12 @@ function createApp(opts) {
     if (home.now() - p.at > OWNER_WAIT_MS) return res.json({ status: 'expired' });
     home.setup(p.starter, p.answers);
     res.json({ status: 'applied', promises: promisesText(home.gate.constitution) });
+  });
+  app.post('/owner/decline-setup', (req, res) => {
+    if (!owner(req, res)) return;
+    if (!home.pendingSetup) return res.status(404).end();
+    home.pendingSetup = null;
+    res.json({ status: 'declined' });
   });
   app.post('/owner/approve/:id', (req, res) => {
     if (!owner(req, res)) return;
