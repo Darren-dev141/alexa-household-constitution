@@ -37,5 +37,7 @@ The demo writes `demo/transcript.txt`.
 ## Run the server
 
 ```
-OWNER_KEY=... npm start   # http://127.0.0.1:3000/mcp
+OWNER_KEY=... npm start   # MCP at http://127.0.0.1:3000/mcp, parent's page at http://127.0.0.1:3000/owner
 ```
+
+**Local only for now.** `/mcp` has no sign-in yet; OAuth 2.1 account linking is not built. The home code on `/owner` is a shared secret and is only safe over HTTPS. The server binds to 127.0.0.1. Do not put it behind a public tunnel until sign-in exists.
