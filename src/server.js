@@ -177,8 +177,16 @@ function createApp(opts) {
     const sid = req.get('mcp-session-id');
     let t = sid && sessions[sid];
     if (!t) {
-      if (sid || !isInitializeRequest(req.body))
-        return res.status(sid ? 404 : 400).json({ jsonrpc: '2.0', error: { code: -32000, message: 'No valid session' }, id: null });
+      if (sid) return res.status(404).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Session not found' }, id: null });
+      if (!isInitializeRequest(req.body)) {
+        // Host didn't keep a session: serve this request statelessly. With no session the server
+        // can't ask the person, so every ask-first action is held for the decision-maker.
+        const st = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+        const srv = buildMcp(home);
+        res.on('close', () => { st.close(); srv.close(); });
+        await srv.connect(st);
+        return st.handleRequest(req, res, req.body);
+      }
       t = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID(), onsessioninitialized: id => { sessions[id] = t; } });
       t.onclose = () => { if (t.sessionId) delete sessions[t.sessionId]; };
       await buildMcp(home).connect(t);

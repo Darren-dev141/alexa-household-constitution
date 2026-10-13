@@ -115,6 +115,28 @@ test('a host that cannot ask the person: ask-first actions go to the decision-ma
   } finally { await h.client.close(); srv.close(); }
 });
 
+test('a host that drops the session: requests still work, ask-first is held, never executed', async () => {
+  const { home, srv, base } = await start();
+  try {
+    home.setup('family', { spendConfirmCents: '75' });
+    const rpc = async (id, name, args) => {
+      const r = await fetch(base + '/mcp', { method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-11-25' },
+        body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) });
+      assert.strictEqual(r.status, 200);
+      const body = await r.text();
+      const json = body.trim().startsWith('{') ? JSON.parse(body) : JSON.parse(body.split('\n').find(l => l.startsWith('data:')).slice(5));
+      return json.result.content[0].text;
+    };
+    assert.strictEqual(await rpc(1, 'place_order', { item: 'dish soap', quantity: 1 }), 'Done.');
+    assert.match(await rpc(2, 'place_order', { item: 'air fryer', quantity: 1 }), /sent that to the person who runs your home/);
+    assert.strictEqual(home.sent.length, 1, 'the big order was held, not placed');
+    const stale = await fetch(base + '/mcp', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-session-id': 'gone' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list' }) });
+    assert.strictEqual(stale.status, 404, 'an unknown session id gets 404 so the host starts a new one (spec)');
+  } finally { srv.close(); }
+});
+
 test('splitting a big order into small ones still gets asked', async () => {
   const { home, srv, base } = await start();
   const h = await connect(base, { canAsk: true, answers: [true] });
