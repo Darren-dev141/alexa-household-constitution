@@ -88,7 +88,7 @@ test('MCP: setup, quiet order, ask-first via the device prompt, refusal, store d
     assert.strictEqual(ok.status, 'applied'); assert.match(await h.call('read_promises'), /\$500\.00/);
 
     assert.match(await h.call('change_promise', { ask_first_amount: '40' }), /Done\..*\$40\.00/, 'stricter change applies directly');
-    assert.match(await h.call('what_did_you_do'), /order 5/);
+    assert.match(await h.call('what_did_you_do'), /ordered 5 × oat milk/);
     assert.ok(home.log.verify().ok);
   } finally { await h.client.close(); srv.close(); }
 });
