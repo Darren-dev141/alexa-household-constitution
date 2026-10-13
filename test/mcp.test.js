@@ -5,65 +5,111 @@ const assert = require('node:assert');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StreamableHTTPClientTransport } = require('@modelcontextprotocol/sdk/client/streamableHttp.js');
+const { ElicitRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
 const { createApp } = require('../src/server');
 
-test('MCP over Streamable HTTP: setup, quiet order, ask-first order, refusal, owner-only loosening', async () => {
-  const dataDir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'hcmcp-'));
-  const { app, home } = createApp({ dataDir, ownerKey: 'owner-secret' });
+const tmp = p => fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), p));
+
+async function start(opts = {}) {
+  const { app, home } = createApp({ dataDir: tmp('hcmcp-'), ownerKey: 'owner-secret', ...opts });
   const srv = await new Promise(r => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
-  const base = `http://127.0.0.1:${srv.address().port}`;
-  const client = new Client({ name: 'test', version: '1' });
+  return { home, srv, base: `http://127.0.0.1:${srv.address().port}` };
+}
+// canAsk=true: the host can put a question to the person (elicitation). `answers` scripts what they say.
+async function connect(base, { canAsk, answers = [] } = {}) {
+  const client = new Client({ name: 'test-host', version: '1' }, { capabilities: canAsk ? { elicitation: {} } : {} });
+  const asked = [];
+  if (canAsk) client.setRequestHandler(ElicitRequestSchema, async req => {
+    asked.push(req.params.message);
+    const a = answers.shift();
+    return a === undefined ? { action: 'cancel' } : { action: 'accept', content: { go_ahead: a } };
+  });
   await client.connect(new StreamableHTTPClientTransport(new URL(base + '/mcp')));
   const call = async (name, args = {}) => (await client.callTool({ name, arguments: args })).content[0].text;
-  try {
-    assert.strictEqual(client.getServerVersion().name, 'household-promises');
-    const tools = (await client.listTools()).tools.map(t => t.name).sort();
-    assert.deepStrictEqual(tools, ['change_promise', 'confirm_action', 'finish_setup', 'place_order', 'read_promises', 'send_message', 'start_setup', 'what_did_you_do']);
-    assert.ok(!tools.some(t => /approve|owner|token/.test(t)), 'no approval path is an MCP tool');
+  return { client, call, asked, answers };
+}
+const ownerGet = (base, p) => fetch(base + p, { headers: { 'x-owner-key': 'owner-secret' } }).then(r => r.json());
+const ownerPost = (base, p) => fetch(base + p, { method: 'POST', headers: { 'x-owner-key': 'owner-secret' } }).then(r => r.json());
 
-    const setup = await call('finish_setup', { home_type: 'family', ask_first_amount: 'seventy five dollars', allergies: 'peanuts and tree nuts', trusted_contacts: 'mom' });
+test('MCP: setup, quiet order, ask-first via the device prompt, refusal, store drift, owner-only loosening', async () => {
+  const { home, srv, base } = await start();
+  const h = await connect(base, { canAsk: true });
+  try {
+    assert.strictEqual(h.client.getServerVersion().name, 'household-promises');
+    const tools = (await h.client.listTools()).tools.map(t => t.name).sort();
+    assert.deepStrictEqual(tools, ['change_promise', 'finish_setup', 'place_order', 'read_promises', 'send_message', 'start_setup', 'what_did_you_do']);
+    assert.ok(!tools.some(t => /confirm|approve|owner|token/.test(t)), 'the assistant has no tool that says yes');
+
+    const setup = await h.call('finish_setup', { home_type: 'family', ask_first_amount: 'seventy five dollars', allergies: 'peanuts and tree nuts', trusted_contacts: 'mom' });
     assert.match(setup, /always ask before spending more than \$75\.00/);
 
-    const o = { item: 'oat milk', quantity: 1 };
-    assert.strictEqual(await call('place_order', o), 'Done.');
-    assert.strictEqual(home.sent.length, 1);
+    assert.strictEqual(await h.call('place_order', { item: 'oat milk', quantity: 1 }), 'Done.');
     assert.strictEqual(home.sent[0].unitCents, 1899, 'price came from the store, not the assistant');
+    assert.strictEqual(h.asked.length, 0, 'small stuff never interrupts');
 
-    const ask = await call('place_order', { item: 'oat milk', quantity: 5 });
-    assert.match(ask, /\$94\.95/); assert.strictEqual(home.sent.length, 1, 'nothing ordered before yes');
-    const id = ask.match(/with id ([0-9a-f]+)/)[1];
-    assert.match(await call('confirm_action', { id, their_words: 'yes' }), /Here's what I did: order 5/);
+    h.answers.push(true);
+    assert.match(await h.call('place_order', { item: 'oat milk', quantity: 5 }), /Here's what I did: order 5/);
+    assert.match(h.asked[0], /\$94\.95/, 'the person was asked, with the real price');
     assert.strictEqual(home.sent.length, 2);
-    assert.match(await call('confirm_action', { id, their_words: 'yes' }), /expired/, 'a yes cannot be reused');
 
-    assert.match(await call('place_order', { item: 'peanut butter' }), /promised never/);
+    h.answers.push(false);
+    assert.match(await h.call('place_order', { item: 'oat milk', quantity: 6 }), /Okay, I won't/);
+    assert.strictEqual(home.sent.length, 2, 'a no orders nothing');
+
+    assert.match(await h.call('place_order', { item: 'oat milk', quantity: 7 }), /Okay, I won't/, 'no answer counts as no');
+    assert.strictEqual(home.sent.length, 2);
+
+    assert.match(await h.call('place_order', { item: 'peanut butter' }), /promised never/);
     home.vendor.setSubstitute('oat-milk-6', 'almond-milk-6'); // out of stock: store swaps in a tree-nut product
-    assert.match(await call('place_order', { item: 'oat milk' }), /tree nuts/);
+    assert.match(await h.call('place_order', { item: 'oat milk' }), /tree nuts/);
     home.vendor.setSubstitute('oat-milk-6', null);
     assert.strictEqual(home.sent.length, 2);
 
-    // Store changes the price between the yes and the charge: blocked, nothing charged.
-    const fry = await call('place_order', { item: 'air fryer' });
-    assert.match(fry, /\$89\.99/);
-    home.vendor.setPrice('air-fryer', 10999);
-    assert.match(await call('confirm_action', { id: fry.match(/with id ([0-9a-f]+)/)[1], their_words: 'yes' }), /stopped before paying/);
+    // The store raises the price while the person is being asked: the yes was for the old price, so nothing is charged.
+    const before = h.asked.length;
+    h.client.setRequestHandler(ElicitRequestSchema, async req => {
+      h.asked.push(req.params.message); home.vendor.setPrice('air-fryer', 10999);
+      return { action: 'accept', content: { go_ahead: true } };
+    });
+    assert.match(await h.call('place_order', { item: 'air fryer' }), /stopped before paying/);
+    assert.match(h.asked[before], /\$89\.99/);
     assert.strictEqual(home.sent.length, 2);
 
-    assert.match(await call('change_promise', { ask_first_amount: '500' }), /sent that to the person who runs your home/);
-    assert.match(await call('read_promises'), /\$75\.00/, 'loosening not applied by the assistant');
+    assert.match(await h.call('change_promise', { ask_first_amount: '500' }), /sent that to the person who runs your home/);
+    assert.match(await h.call('read_promises'), /\$75\.00/, 'loosening not applied by the assistant');
     assert.strictEqual((await fetch(base + '/owner/pending')).status, 401);
-    const pend = await (await fetch(base + '/owner/pending', { headers: { 'x-owner-key': 'owner-secret' } })).json();
-    const ok = await (await fetch(base + '/owner/approve/' + pend[0].id, { method: 'POST', headers: { 'x-owner-key': 'owner-secret' } })).json();
-    assert.strictEqual(ok.status, 'applied'); assert.match(await call('read_promises'), /\$500\.00/);
+    const pend = await ownerGet(base, '/owner/pending');
+    const ok = await ownerPost(base, '/owner/approve/' + pend.changes[0].id);
+    assert.strictEqual(ok.status, 'applied'); assert.match(await h.call('read_promises'), /\$500\.00/);
 
-    assert.match(await call('change_promise', { ask_first_amount: '40' }), /Done\..*\$40\.00/, 'stricter change applies directly');
-    assert.match(await call('what_did_you_do'), /order 5/);
+    assert.match(await h.call('change_promise', { ask_first_amount: '40' }), /Done\..*\$40\.00/, 'stricter change applies directly');
+    assert.match(await h.call('what_did_you_do'), /order 5/);
     assert.ok(home.log.verify().ok);
-  } finally { await client.close(); srv.close(); }
+  } finally { await h.client.close(); srv.close(); }
+});
+
+test('a host that cannot ask the person: ask-first actions go to the decision-maker, never self-approved', async () => {
+  const { home, srv, base } = await start();
+  const h = await connect(base, { canAsk: false });
+  try {
+    await h.call('finish_setup', { home_type: 'family', ask_first_amount: '75' });
+    assert.match(await h.call('place_order', { item: 'air fryer' }), /sent that to the person who runs your home/);
+    assert.strictEqual(home.sent.length, 0);
+    for (const name of ['confirm_action', 'approve', 'owner_approve']) { // nothing the assistant can call says yes
+      const r = await h.client.callTool({ name, arguments: { id: 'x' } }).catch(e => ({ isError: true, e: String(e) }));
+      assert.ok(r.isError, name + ' must not exist');
+    }
+    assert.strictEqual(home.sent.length, 0);
+    const pend = await ownerGet(base, '/owner/pending');
+    assert.match(pend.actions[0].what, /air fryer/);
+    const r = await ownerPost(base, '/owner/approve/' + pend.actions[0].id);
+    assert.strictEqual(r.status, 'executed'); assert.strictEqual(home.sent.length, 1);
+    assert.strictEqual(home.log.entries().find(e => e.approval === 'yes').approver, 'decision-maker (phone)');
+  } finally { await h.client.close(); srv.close(); }
 });
 
 test('restart keeps the promises; a tampered promises file refuses to start', async () => {
-  const dataDir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'hcrs-'));
+  const dataDir = tmp('hcrs-');
   const a = createApp({ dataDir, ownerKey: 'k' });
   a.home.setup('family', { spendConfirmCents: '60' });
   const r = a.home.gate.proposeAmendment({ spendConfirmCents: 4000 }, { source: 'user-utterance' });
