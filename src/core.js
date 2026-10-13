@@ -115,5 +115,7 @@ function spokenPrompt(contract, ev) {
   return `I'm about to ${describe(contract)}. I'm checking because ${ev.reasons.map(r => r.say).join(' and ')}. Should I go ahead?`;
 }
 
-module.exports = { canon, sha, hashOf, norm, toContract, STARTERS, SETUP_QUESTIONS, parseSpokenMoney,
+function verifyConstitution(c) { const { hash, ...body } = c || {}; return !!hash && hashOf(body) === hash; }
+
+module.exports = { verifyConstitution, canon, sha, hashOf, norm, toContract, STARTERS, SETUP_QUESTIONS, parseSpokenMoney,
   parseSpokenList, setupConstitution, TIER, evaluate, money, describe, spokenPrompt };

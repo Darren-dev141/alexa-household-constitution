@@ -9,18 +9,31 @@ const express = require('express');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { z } = require('zod');
-const { setupConstitution, SETUP_QUESTIONS, STARTERS, money } = require('./core');
+const { setupConstitution, SETUP_QUESTIONS, STARTERS, money, describe, verifyConstitution } = require('./core');
+const { SandboxVendor } = require('./vendor');
 const { Gate, Executor } = require('./gate');
 const { ReceiptLog, tuningSuggestions } = require('./receipts');
 
-function createHome({ dataDir, ownerKey }) {
+function createHome({ dataDir, ownerKey, vendor = new SandboxVendor(), address = '12 Elm St' }) {
   fs.mkdirSync(dataDir, { recursive: true });
   const log = new ReceiptLog(path.join(dataDir, 'receipts.jsonl'));
-  const key = crypto.randomBytes(32);
-  const sent = [];
-  const vendor = c => { sent.push(c); return { ref: 'SANDBOX-' + sent.length }; }; // sandbox vendor
-  const home = { log, sent, gate: null, exec: new Executor({ key, vendor, log }), ownerKey, amendments: new Map() };
-  home.setup = (starter, answers) => { home.gate = new Gate({ constitution: setupConstitution(starter, answers), log, key }); };
+  const keyFile = path.join(dataDir, 'gate.key'), stateFile = path.join(dataDir, 'household.json');
+  if (!fs.existsSync(keyFile)) fs.writeFileSync(keyFile, crypto.randomBytes(32).toString('hex'), { mode: 0o600 });
+  const key = Buffer.from(fs.readFileSync(keyFile, 'utf8').trim(), 'hex');
+  vendor.address = address;
+  const home = { log, vendor, sent: vendor.orders, gate: null, ownerKey, amendments: new Map(), quotes: new Map(),
+    exec: new Executor({ key, vendor: c => vendor.commit(c), log }) };
+  const save = () => fs.writeFileSync(stateFile, JSON.stringify({ address, current: home.gate.constitution.hash, versions: home.gate.versions }, null, 1));
+  if (fs.existsSync(stateFile)) { // restart: reload, and refuse to run on a tampered or broken chain
+    const st = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    for (const v of Object.values(st.versions)) if (!verifyConstitution(v)) throw new Error('household promises file was altered; refusing to start');
+    const chk = log.verify(); if (!chk.ok) throw new Error('receipt log altered at entry ' + chk.at + '; refusing to start');
+    home.gate = new Gate({ constitution: st.versions[st.current], versions: st.versions, log, key, onAdopt: () => save() });
+  }
+  home.setup = (starter, answers) => {
+    home.gate = new Gate({ constitution: setupConstitution(starter, answers), log, key, onAdopt: () => save() });
+    save();
+  };
   return home;
 }
 
@@ -57,28 +70,33 @@ function buildMcp(home) {
   s.registerTool('read_promises', { description: 'Say back what the assistant has promised this home.',
     annotations: { readOnlyHint: true } }, async () => home.gate ? text(promisesText(home.gate.constitution)) : needSetup());
 
-  s.registerTool('place_order', { description: 'Order a product for the home. Small orders happen quietly; bigger ones need a yes.',
-    inputSchema: { sku: z.string(), name: z.string(), qty: z.number().int().min(1), unit_cents: z.number().int().min(0),
-      address: z.string(), delivery_date: z.string(), requested_sku: z.string().optional(), allergens: z.array(z.string()).optional() },
-    annotations: { destructiveHint: true } },
+  s.registerTool('place_order', { description: 'Order something for the home. Say the item as the person said it and how many. The store sets the price.',
+    inputSchema: { item: z.string(), quantity: z.number().int().min(1).max(50).default(1) }, annotations: { destructiveHint: true } },
   async a => {
     if (!home.gate) return needSetup();
-    const p = { kind: 'order', sku: a.sku, name: a.name, qty: a.qty, unitCents: a.unit_cents, address: a.address,
-      deliveryDate: a.delivery_date, requestedSku: a.requested_sku, allergens: a.allergens };
-    return decide(p);
+    const q = home.vendor.quote(a.item, a.quantity);
+    if (!q) return text("I couldn't find " + a.item + ' at the store.');
+    return decide(q.line, q.quoteId);
   });
 
   s.registerTool('send_message', { description: 'Send a message for the household.',
     inputSchema: { to: z.string(), body: z.string() }, annotations: { destructiveHint: true } },
   async a => home.gate ? decide({ kind: 'message', to: a.to, body: a.body }) : needSetup());
 
-  function decide(p) {
+  function checkout(quoteId, fallback) { return quoteId ? home.vendor.finalize(quoteId) : fallback; }
+  function decide(p, quoteId) {
     const r = home.gate.propose(p);
     if (r.status === 'refused') return text(r.say);
-    if (r.status === 'confirm') return text(`${r.say} (ask the person; pass their exact words to confirm_action with id ${r.pendingId})`);
-    const done = run(p, r.token);
-    if (done.status !== 'executed') return text(`I couldn't do that: ${done.why}.`);
+    if (r.status === 'confirm') { if (quoteId) home.quotes.set(r.pendingId, quoteId);
+      return text(r.say + ' (ask the person; pass their exact words to confirm_action with id ' + r.pendingId + ')'); }
+    const done = run(checkout(quoteId, p), r.token);
+    if (done.status !== 'executed') return text(changed(done));
     return text(r.notify || 'Done.');
+  }
+  function changed(done) {
+    return done.why === 'action changed after approval'
+      ? "I stopped before paying: the store changed the order after you said yes. Nothing was charged. Ask me again to hear the new details."
+      : "I couldn't do that: " + done.why + '.';
   }
 
   s.registerTool('confirm_action', { description: "Pass the person's exact spoken answer to a pending question.",
@@ -90,8 +108,9 @@ function buildMcp(home) {
     // Spoken yes relayed by the assistant: recorded as such in the receipt, never as a decision-maker approval.
     const r = home.gate.confirm(a.id, { said: a.their_words, speaker: 'household voice (relayed by assistant)', source: 'user-utterance' });
     if (r.status !== 'approved') return text("Okay, I won't.");
-    const done = run(contract, r.token);
-    return text(done.status === 'executed' ? "Done. Here's what I did: " + require('./core').describe(contract) + '.' : `I couldn't do that: ${done.why}.`);
+    const quoteId = home.quotes.get(a.id); home.quotes.delete(a.id);
+    const done = run(checkout(quoteId, contract), r.token);
+    return text(done.status === 'executed' ? "Done. Here's what I did: " + describe(contract) + '.' : changed(done));
   });
 
   s.registerTool('change_promise', { description: 'Ask to change a promise. Stricter changes apply after a spoken yes; anything less strict goes to the person who runs the home for approval.',

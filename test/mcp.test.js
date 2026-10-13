@@ -21,21 +21,32 @@ test('MCP over Streamable HTTP: setup, quiet order, ask-first order, refusal, ow
     assert.deepStrictEqual(tools, ['change_promise', 'confirm_action', 'finish_setup', 'place_order', 'read_promises', 'send_message', 'start_setup', 'what_did_you_do']);
     assert.ok(!tools.some(t => /approve|owner|token/.test(t)), 'no approval path is an MCP tool');
 
-    const setup = await call('finish_setup', { home_type: 'family', ask_first_amount: 'seventy five dollars', allergies: 'peanuts', trusted_contacts: 'mom' });
+    const setup = await call('finish_setup', { home_type: 'family', ask_first_amount: 'seventy five dollars', allergies: 'peanuts and tree nuts', trusted_contacts: 'mom' });
     assert.match(setup, /always ask before spending more than \$75\.00/);
 
-    const o = { sku: 'oat', name: 'Oat milk', qty: 1, unit_cents: 499, address: '12 Elm', delivery_date: '2026-10-15' };
+    const o = { item: 'oat milk', quantity: 1 };
     assert.strictEqual(await call('place_order', o), 'Done.');
     assert.strictEqual(home.sent.length, 1);
+    assert.strictEqual(home.sent[0].unitCents, 1899, 'price came from the store, not the assistant');
 
-    const ask = await call('place_order', { ...o, qty: 20 });
-    assert.match(ask, /\$99\.80/); assert.strictEqual(home.sent.length, 1, 'nothing ordered before yes');
+    const ask = await call('place_order', { item: 'oat milk', quantity: 5 });
+    assert.match(ask, /\$94\.95/); assert.strictEqual(home.sent.length, 1, 'nothing ordered before yes');
     const id = ask.match(/with id ([0-9a-f]+)/)[1];
-    assert.match(await call('confirm_action', { id, their_words: 'yes' }), /Here's what I did: order 20/);
+    assert.match(await call('confirm_action', { id, their_words: 'yes' }), /Here's what I did: order 5/);
     assert.strictEqual(home.sent.length, 2);
     assert.match(await call('confirm_action', { id, their_words: 'yes' }), /expired/, 'a yes cannot be reused');
 
-    assert.match(await call('place_order', { ...o, sku: 'pb', requested_sku: 'oat', name: 'Peanut butter', allergens: ['peanuts'] }), /never bring that|promised never/);
+    assert.match(await call('place_order', { item: 'peanut butter' }), /promised never/);
+    home.vendor.setSubstitute('oat-milk-6', 'almond-milk-6'); // out of stock: store swaps in a tree-nut product
+    assert.match(await call('place_order', { item: 'oat milk' }), /tree nuts/);
+    home.vendor.setSubstitute('oat-milk-6', null);
+    assert.strictEqual(home.sent.length, 2);
+
+    // Store changes the price between the yes and the charge: blocked, nothing charged.
+    const fry = await call('place_order', { item: 'air fryer' });
+    assert.match(fry, /\$89\.99/);
+    home.vendor.setPrice('air-fryer', 10999);
+    assert.match(await call('confirm_action', { id: fry.match(/with id ([0-9a-f]+)/)[1], their_words: 'yes' }), /stopped before paying/);
     assert.strictEqual(home.sent.length, 2);
 
     assert.match(await call('change_promise', { ask_first_amount: '500' }), /sent that to the person who runs your home/);
@@ -46,7 +57,21 @@ test('MCP over Streamable HTTP: setup, quiet order, ask-first order, refusal, ow
     assert.strictEqual(ok.status, 'applied'); assert.match(await call('read_promises'), /\$500\.00/);
 
     assert.match(await call('change_promise', { ask_first_amount: '40' }), /Done\..*\$40\.00/, 'stricter change applies directly');
-    assert.match(await call('what_did_you_do'), /order 20/);
+    assert.match(await call('what_did_you_do'), /order 5/);
     assert.ok(home.log.verify().ok);
   } finally { await client.close(); srv.close(); }
+});
+
+test('restart keeps the promises; a tampered promises file refuses to start', async () => {
+  const dataDir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'hcrs-'));
+  const a = createApp({ dataDir, ownerKey: 'k' });
+  a.home.setup('family', { spendConfirmCents: '60' });
+  const r = a.home.gate.proposeAmendment({ spendConfirmCents: 4000 }, { source: 'user-utterance' });
+  a.home.gate.confirmAmendment(r.pendingId, { said: 'yes', speaker: 'p', source: 'user-utterance' });
+  const b = createApp({ dataDir, ownerKey: 'k' });
+  assert.strictEqual(b.home.gate.constitution.version, 2);
+  assert.strictEqual(b.home.gate.constitution.params.spendConfirmCents, 4000);
+  const f = path.join(dataDir, 'household.json');
+  fs.writeFileSync(f, fs.readFileSync(f, 'utf8').replace('"spendConfirmCents": 4000', '"spendConfirmCents": 900000'));
+  assert.throws(() => createApp({ dataDir, ownerKey: 'k' }), /altered/);
 });

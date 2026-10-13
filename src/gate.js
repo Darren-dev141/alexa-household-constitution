@@ -9,12 +9,13 @@ const { hashOf, toContract, evaluate, spokenPrompt, describe, TIER, norm } = req
 const TOKEN_TTL_MS = 60_000;
 
 class Gate {
-  constructor({ constitution, log, key, now = Date.now }) {
+  constructor({ constitution, log, key, now = Date.now, versions, onAdopt }) {
     this.key = key; this.log = log; this.now = now;
-    this.versions = {}; this.pending = new Map();
-    this.adopt(constitution, null);
+    this.versions = { ...(versions || {}) }; this.pending = new Map();
+    this.adopt(constitution);
+    this.onAdopt = onAdopt;
   }
-  adopt(c) { this.constitution = c; this.versions[c.hash] = c; }
+  adopt(c) { this.constitution = c; this.versions[c.hash] = c; if (this.onAdopt) this.onAdopt(c); }
 
   token(contractHash) {
     const nonce = crypto.randomBytes(12).toString('hex'), exp = this.now() + TOKEN_TTL_MS;
