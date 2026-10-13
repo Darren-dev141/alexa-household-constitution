@@ -126,7 +126,7 @@ test('consumer language: no rule codes, hashes, or trace terms reach the user', 
   const texts = [gate.propose(order({ unitCents: 9000 })).say, gate.propose(order({ unitCents: 2999 })).notify,
     gate.proposeAmendment({ spendConfirmCents: 1 }, { source: 'agent' }).say, gate.propose(order({ name: 'Peanut butter', sku: 'B0-PB', requestedSku: 'B0-SUNBUTTER', allergens: ['peanuts'] })).say,
     describe(toContract(order()))];
-  for (const t of texts) assert.doesNotMatch(t, /\bR\d\b|tier|hash|token|contract|trace|HIGH|[0-9a-f]{16}/i, t);
+  for (const t of texts) assert.doesNotMatch(t, /\bR\d\b|tier|hash|token|contract|trace|HIGH|rule|polic|setting|constitution|[0-9a-f]{16}/i, t);
 });
 
 test('latency: gate decision p95 well under conversational budget', () => {
