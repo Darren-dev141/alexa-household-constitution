@@ -20,7 +20,7 @@ An MCP server that lets an assistant act for a family while keeping a short list
 - **The assistant cannot set up the home or loosen a promise.** First-run setup is read back and confirmed the same way. Loosening a promise always goes to the person who runs the home. Tightening one applies right away.
 - **The store sets the price, product and allergens, not the assistant.** Checkout re-reads the order, and stops if anything changed after the yes.
 - **Splitting an order doesn't avoid the ask.** Orders made without asking in the last 24 hours count toward the ask-first amount.
-- **Every decision is logged in a hash-chained receipt log.** Each logged decision replays to the same outcome. A tampered promises file or log stops the server from starting.
+- **Every decision is logged in a hash-chained, tamper-evident receipt log: edits to past entries are detected, though someone with disk access could rewrite the whole chain.** Each logged decision replays to the same outcome. A tampered promises file or log stops the server from starting.
 
 **Who approves what:** an ask-first prompt is answered by whoever is at the device, and the receipt records that. Promise changes, first-run setup without a prompt, and held orders need the person who runs the home.
 

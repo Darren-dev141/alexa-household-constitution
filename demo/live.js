@@ -56,7 +56,8 @@ async function runLive({ port = 0, ownerKey, paceMs = 0, waitForOwner, log = con
 if (require.main === module) {
   const ownerKey = process.env.OWNER_KEY || crypto.randomBytes(9).toString('base64url');
   const port = Number(process.env.PORT || 3000);
-  console.log(`Parent's page: http://127.0.0.1:${port}/owner   home code (do not show on screen): ${ownerKey}\n`);
+  // Recording: set OWNER_KEY beforehand so the code never appears on screen.
+  console.log(`Parent's page: http://127.0.0.1:${port}/owner   home code: ${process.env.OWNER_KEY ? '(from OWNER_KEY, not shown)' : ownerKey + '   (set OWNER_KEY to keep it off screen)'}\n`);
   runLive({ port, ownerKey, paceMs: Number(process.env.DEMO_PACE_MS || 1500) })
     .then(r => { console.log('\nLIVE DEMO DONE', JSON.stringify({ setUp: r.setUp, airFryerOrdered: r.airFryerOrdered, orders: r.orders, chainOk: r.chainOk })); })
     .catch(e => { console.error('LIVE DEMO FAILED:', e.message); process.exitCode = 1; });
