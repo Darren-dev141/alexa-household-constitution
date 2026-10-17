@@ -11,7 +11,7 @@ const TOKEN_TTL_MS = 60_000;
 class Gate {
   constructor({ constitution, log, key, now = Date.now, versions, onAdopt }) {
     this.key = key; this.log = log; this.now = now;
-    this.versions = { ...(versions || {}) }; this.pending = new Map();
+    this.versions = { ...(versions || {}) }; this.pending = new Map(); this.zones = new Map();
     this.adopt(constitution);
     this.onAdopt = onAdopt;
   }
@@ -36,6 +36,13 @@ class Gate {
   propose(proposal) {
     const t0 = process.hrtime.bigint();
     const contract = toContract(proposal), contractHash = hashOf(contract);
+    if (this.zones.size) {
+      const zone = [...this.zones.values()][0];
+      const r = this.log.append({ type: 'zone', decision: 'held', zone: zone.name, setBy: zone.setBy,
+        constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash, contract, contractHash });
+      return { status: 'held', zone: zone.name, receipt: r.seq,
+        say: `I'm in a quiet zone right now, so I can't do that. I've written it down.` };
+    }
     const recentCents = contract.kind === 'order' ? this.recentUnaskedSpend() : 0;
     const ev = evaluate(contract, this.constitution, { recentCents });
     const latencyMs = Number(process.hrtime.bigint() - t0) / 1e6;
@@ -48,7 +55,7 @@ class Gate {
     }
     if (ev.tier === TIER.CONFIRM) {
       const id = crypto.randomBytes(8).toString('hex');
-      this.pending.set(id, { contract, contractHash, base });
+      this.pending.set(id, { contract, contractHash, base, why: ev.reasons.map(x => x.say) });
       return { status: 'confirm', pendingId: id, say: spokenPrompt(contract, ev) };
     }
     const r = this.log.append({ ...base, decision: 'allowed', approval: 'auto', approver: 'household rules' });
@@ -65,6 +72,33 @@ class Gate {
     const yes = /^(yes|yeah|yep|sure|go ahead|do it|ok|okay)\b/i.test(norm(said));
     const r = this.log.append({ ...p.base, decision: yes ? 'allowed' : 'declined', approval: yes ? 'yes' : 'no', approver: speaker });
     return yes ? { status: 'approved', token: this.token(p.contractHash), receipt: r.seq } : { status: 'declined', receipt: r.seq };
+  }
+
+  // Quiet Zones (Portable Constitution, venue-side): while a zone is active,
+  // every gated action is held and the hold is receipted. A zone set by a
+  // venue signal can only be ended by that signal — a person in the home
+  // cannot lift it early, and the attempt is receipted too. Zones entered by
+  // the household itself can be lifted by the household.
+  zoneEvent({ name, active, source }) {
+    const z = norm(name);
+    if (!z) throw new Error('zone needs a name');
+    if (source !== 'venue-signal' && source !== 'user-utterance')
+      return { status: 'rejected', say: 'Only a venue signal or a person in the home can change a quiet zone.' };
+    const setBy = source === 'venue-signal' ? 'venue' : 'household';
+    const base = { type: 'zone', zone: z, constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash };
+    if (active) {
+      if (!this.zones.has(z)) { this.zones.set(z, { name: z, setBy }); this.log.append({ ...base, decision: 'entered', setBy }); }
+      return { status: 'entered', zone: z, say: `Quiet zone on for ${z}. I'll hold anything I'm asked to do until it lifts.` };
+    }
+    const cur = this.zones.get(z);
+    if (!cur) return { status: 'none', zone: z, say: `There is no quiet zone called ${z} right now.` };
+    if (cur.setBy === 'venue' && source !== 'venue-signal') {
+      this.log.append({ ...base, decision: 'exit-rejected', setBy: cur.setBy, attemptedBy: setBy });
+      return { status: 'rejected', zone: z, say: 'That quiet zone was set by the venue, so it can only lift when the venue ends it.' };
+    }
+    this.zones.delete(z);
+    this.log.append({ ...base, decision: 'exited', setBy: cur.setBy });
+    return { status: 'exited', zone: z, say: `Quiet zone off for ${z}.` };
   }
 
   // Amendments: only from a person's voice, read back, spoken yes, new version + receipt.

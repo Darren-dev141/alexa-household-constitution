@@ -121,7 +121,8 @@ function buildMcp(home) {
     const r = home.gate.propose(p);
     if (r.status === 'refused') return text(r.say);
     if (r.status === 'confirm') {
-      home.heldActions.set(r.pendingId, { contract: home.gate.pending.get(r.pendingId).contract, quoteId, at: home.now() });
+      const held = home.gate.pending.get(r.pendingId);
+      home.heldActions.set(r.pendingId, { contract: held.contract, why: held.why, quoteId, at: home.now() });
       if (!s.server.getClientCapabilities()?.elicitation) // host can't ask the person: the decision-maker decides
         return text("I've sent that to the person who runs your home to okay. Nothing happens until they do.");
       let answer;
@@ -228,7 +229,7 @@ function createApp(opts) {
     res.set('Cache-Control', 'no-store').json({
       setup: ps ? { say: promisesText(setupConstitution(ps.starter, ps.answers)) } : null,
       changes: [...home.amendments.entries()].filter(([, a]) => fresh(a.at)).map(([id, a]) => ({ id, say: sayChanges(a.changes), changes: a.changes })),
-      actions: [...home.heldActions.entries()].filter(([, h]) => fresh(h.at)).map(([id, h]) => ({ id, what: describe(h.contract) })),
+      actions: [...home.heldActions.entries()].filter(([, h]) => fresh(h.at)).map(([id, h]) => ({ id, what: describe(h.contract), why: h.why || [] })),
     });
   });
   app.post('/owner/approve-setup', (req, res) => {
@@ -256,6 +257,15 @@ function createApp(opts) {
     if (home.now() - a.at > OWNER_WAIT_MS) { home.gate.pending.delete(id); return res.json({ status: 'expired' }); }
     const r = home.gate.confirmAmendment(id, { said: 'yes, change it', speaker: 'decision-maker (phone)', source: 'user-utterance' });
     res.json({ ...r, promises: promisesText(home.gate.constitution) });
+  });
+  // Venue quiet-zone signal (Portable Constitution prototype). NOT an MCP tool:
+  // the assistant cannot call it. In production the venue would hold its own
+  // credential; tonight the owner key is the stand-in.
+  app.post('/venue/zone', (req, res) => {
+    if (!owner(req, res)) return;
+    if (!home.gate) return res.status(404).end();
+    const { name, active } = req.body || {};
+    res.json(home.gate.zoneEvent({ name, active: !!active, source: 'venue-signal' }));
   });
   app.post('/owner/decline/:id', (req, res) => {
     if (!owner(req, res)) return;

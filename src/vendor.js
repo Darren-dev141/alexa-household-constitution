@@ -16,7 +16,7 @@ const CATALOG = [
 ];
 
 class SandboxVendor {
-  constructor({ deliveryDate = '2026-10-15' } = {}) {
+  constructor({ deliveryDate = '2026-10-24' } = {}) {
     this.items = new Map(CATALOG.map(i => [i.sku, { ...i }]));
     this.substitutes = new Map(); // requested sku -> sku the store will actually send
     this.quotes = new Map();
