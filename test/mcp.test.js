@@ -162,7 +162,8 @@ test("decision-maker's phone page: plain words, no secrets, everything waiting i
     p = await ownerGet(base, '/owner/pending');
     assert.strictEqual(p.changes[0].say, 'ask before spending more than $200.00; no foods are kept out of your home');
     assert.match(p.actions[0].what, /air fryer for \$89\.99/);
-    for (const s of [p.changes[0].say, p.actions[0].what]) assert.doesNotMatch(s, /Cents|\{|rule|polic|setting/);
+    assert.deepStrictEqual(p.actions[0].why, ['it costs $89.99, over your $75.00 ask-first limit'], 'the phone says why it is waiting');
+    for (const s of [p.changes[0].say, p.actions[0].what, ...p.actions[0].why]) assert.doesNotMatch(s, /Cents|\{|rule|polic|setting/);
     assert.strictEqual((await ownerPost(base, '/owner/decline/' + p.changes[0].id)).status, 'declined');
     assert.strictEqual((await ownerPost(base, '/owner/approve/' + p.actions[0].id)).status, 'executed');
     assert.match(await h.call('read_promises'), /\$75\.00.*peanuts/, 'declined change left the promises alone');

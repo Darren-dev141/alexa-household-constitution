@@ -8,13 +8,15 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/slice.test.js test/mcp.test.js test/live.test.js test/core-independence.test.js",
+    "test": "node --test test/slice.test.js test/mcp.test.js test/live.test.js test/core-independence.test.js test/canary.test.js test/zones.test.js",
     "demo": "node demo/run.js",
-    "demo:live": "node demo/live.js"
+    "demo:paced": "DEMO_PACE_MS=1800 node demo/run.js",
+    "demo:live": "node demo/live.js",
+    "canary": "node --test test/canary.test.js test/zones.test.js"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
