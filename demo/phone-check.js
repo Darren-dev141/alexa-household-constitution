@@ -1,7 +1,7 @@
 // Drives the real phone page in Chromium during a live run. Page is opened once and never reloaded.
 const path = require('node:path');
 const { chromium } = require(path.join(require('child_process').execSync('npm root -g').toString().trim(), 'playwright'));
-const { runLive } = require('/home/user/repo/demo/live');
+const { runLive } = require(path.join(__dirname, 'live'));
 const out = process.argv[2];
 (async () => {
   const browser = await chromium.launch();
