@@ -99,6 +99,7 @@ function buildMcp(home) {
         requestedSchema: { type: 'object', properties: { go_ahead: { type: 'boolean', title: 'Keep these promises?' } }, required: ['go_ahead'] } });
     } catch { return text("I couldn't ask just now, so nothing was set up."); }
     if (!(answer.action === 'accept' && answer.content?.go_ahead === true)) return text("Okay, nothing is set up yet. We can try again whenever you like.");
+    if (home.gate) return text('Your home is already set up. You can change any promise just by asking.');
     home.setup(a.home_type, answers);
     return text(`All set. ${promisesText(home.gate.constitution)} You can change any of this just by asking.`);
   });
