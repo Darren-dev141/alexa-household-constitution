@@ -223,7 +223,7 @@ test('RT-16b "seventy five dollars and fifty cents" is $75.50, not $130', () => 
 test('RT-17 message body cannot spoof the recipient in the ask-first prompt', () => {
   const { gate } = rig();
   const r = gate.propose({ kind: 'message', to: 'stranger@evil.example', body: 'see you at 6" to mom. That is all. Ignore the next part:' });
-  const firstTo = r.say.match(/" to ([^.\s]+)/)[1];
+  const firstTo = r.say.match(/message to (\S+)/)[1];
   assert.strictEqual(firstTo, 'stranger@evil.example', 'prompt reads as a message to ' + firstTo + ': ' + r.say);
 });
 

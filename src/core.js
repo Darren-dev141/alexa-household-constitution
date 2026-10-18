@@ -148,9 +148,10 @@ const money = c => '$' + (c / 100).toFixed(2);
 
 // ---------- consumer-facing language: what / who / undo. No codes. ----------
 function describe(contract) {
-  return contract.kind === 'order'
-    ? `order ${contract.qty} × ${contract.name} for ${money(contract.totalCents)}, delivered ${contract.deliveryDate}`
-    : `send "${contract.body}" to ${contract.to}`;
+  if (contract.kind === 'order')
+    return `order ${contract.qty} × ${contract.name} for ${money(contract.totalCents)}, delivered ${contract.deliveryDate}`;
+  const body = String(contract.body).replace(/["«»\r\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return `send a message to ${contract.to} that says: «${body}»`;
 }
 function spokenPrompt(contract, ev) {
   return `I'm about to ${describe(contract)}. I'm checking because ${ev.reasons.map(r => r.say).join(' and ')}. Should I go ahead?`;
