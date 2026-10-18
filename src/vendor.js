@@ -26,10 +26,17 @@ class SandboxVendor {
   }
   find(spoken) {
     const s = norm(spoken).replace(/^(some|a|an|the|more)\s+/, '');
-    for (const i of this.items.values()) if (i.aliases.includes(s) || norm(i.name) === s) return i;
+    const exact = [...this.items.values()].filter(i => i.aliases.includes(s) || norm(i.name) === s);
+    if (exact.length === 1) return exact[0];
     const word = a => new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
-    for (const i of this.items.values()) if ([...i.aliases, norm(i.name)].some(a => word(a).test(s))) return i;
-    return null;
+    const hits = [...this.items.values()].filter(i => [...i.aliases, norm(i.name)].some(a => word(a).test(s)));
+    if (hits.length !== 1) return hits.length ? { ambiguous: true } : null;
+    if (/\b(not|no|without|except)\b/.test(s)) return { ambiguous: true };
+    const names = [...hits[0].aliases, norm(hits[0].name)].sort((a, b) => b.length - a.length);
+    const matched = names.find(a => word(a).test(s));
+    const rest = norm(s.replace(word(matched), ' ')).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (rest) return { ambiguous: true };
+    return hits[0];
   }
   line(requested, qty) {
     const shipSku = this.substitutes.get(requested.sku) || requested.sku;
@@ -40,6 +47,7 @@ class SandboxVendor {
   quote(spokenItem, qty) {
     const want = this.find(spokenItem);
     if (!want) return null;
+    if (want.ambiguous) return { ambiguous: true };
     const quoteId = crypto.randomBytes(6).toString('hex');
     this.quotes.set(quoteId, { sku: want.sku, qty });
     return { quoteId, line: this.line(want, qty) };

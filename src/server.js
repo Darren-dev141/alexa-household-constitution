@@ -122,6 +122,7 @@ function buildMcp(home) {
     if (!home.gate) return needSetup();
     const q = home.vendor.quote(a.item, a.quantity);
     if (!q) return text("I couldn't find " + a.item + ' at the store.');
+    if (q.ambiguous) return text('Which one? I will not guess from "' + a.item + '".');
     return decide(q.line, q.quoteId);
   });
 
