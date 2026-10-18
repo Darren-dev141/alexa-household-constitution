@@ -123,7 +123,9 @@ function buildMcp(home) {
     if (r.status === 'confirm') {
       const held = home.gate.pending.get(r.pendingId);
       home.heldActions.set(r.pendingId, { contract: held.contract, why: held.why, quoteId, at: home.now() });
-      if (!s.server.getClientCapabilities()?.elicitation) // host can't ask the person: the decision-maker decides
+      const ownerOnly = held.contract.kind === 'order'
+        && held.contract.totalCents > 2 * home.gate.constitution.params.spendConfirmCents;
+      if (ownerOnly || !s.server.getClientCapabilities()?.elicitation)
         return text("I've sent that to the person who runs your home to okay. Nothing happens until they do.");
       let answer;
       try {
