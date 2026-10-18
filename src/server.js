@@ -292,6 +292,7 @@ function createApp(opts) {
       setup: ps ? { say: promisesText(setupConstitution(ps.starter, ps.answers)) } : null,
       changes: [...home.amendments.entries()].filter(([, a]) => fresh(a.at)).map(([id, a]) => ({ id, say: sayChanges(a.changes), changes: a.changes })),
       actions: [...home.heldActions.entries()].filter(([, h]) => fresh(h.at)).map(([id, h]) => ({ id, what: describe(h.contract), why: h.why || [] })),
+      zones: home.gate ? [...home.gate.zones.values()].map(z => ({ name: z.name, setBy: z.setBy })) : [],
     });
   });
   app.post('/owner/approve-setup', (req, res) => {

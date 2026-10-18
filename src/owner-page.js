@@ -65,7 +65,8 @@ async function load(){
   if(p.setup){L.insertAdjacentHTML('beforeend','<h2>New home setup</h2>');L.append(card('Start keeping these promises?',p.setup.say,'/owner/approve-setup','/owner/decline-setup'));}
   if(p.changes.length){L.insertAdjacentHTML('beforeend','<h2>Asked to change a promise</h2>');for(const c of p.changes)L.append(card('Change to:',c.say,'/owner/approve/'+c.id,'/owner/decline/'+c.id));}
   if(p.actions.length){L.insertAdjacentHTML('beforeend','<h2>Waiting to be done</h2>');for(const a of p.actions)L.append(card('Go ahead and '+a.what+'?',(a.why||[]).length?'Waiting because '+a.why.join(' and ')+'.':'', '/owner/approve/'+a.id,'/owner/decline/'+a.id));}
-  if(!p.setup&&!p.changes.length&&!p.actions.length)L.innerHTML='<div class="card muted">Nothing is waiting for you.</div>';
+  if(p.zones&&p.zones.length){L.insertAdjacentHTML('beforeend','<h2>Quiet zone</h2>');for(const z of p.zones){const d=document.createElement('div');d.className='card';d.innerHTML='<div><b>Quiet zone on for '+esc(z.name)+'.</b></div><div class="why">'+(z.setBy==='venue'?'Set by the venue. It stays until the venue ends it.':'Set in this home.')+'</div>';L.append(d);}}
+  if(!p.setup&&!p.changes.length&&!p.actions.length&&!(p.zones&&p.zones.length))L.innerHTML='<div class="card muted">Nothing is waiting for you.</div>';
 }
 $('login').onsubmit=e=>{e.preventDefault();sessionStorage.setItem(KEY,$('code').value);$('code').value='';$('login').hidden=true;$('note').textContent='';last='';load();};
 $('forget').onclick=e=>{e.preventDefault();sessionStorage.removeItem(KEY);last='';showLogin('Home code forgotten on this phone.');};
