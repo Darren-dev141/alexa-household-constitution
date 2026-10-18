@@ -1,6 +1,8 @@
 # Demo video: Household Promises
 
-**Target length:** 2:50, with a hard cap of 3:00. That cap is an assumption: check the video length, hosting (public YouTube/Vimeo) and language rules on the official rules page before recording. `docs/friction-log.md` #1 notes that the page sits behind a bot check, and a plain text fetch got through.
+**Submission cut:** `docs/DEVPOST.md`. The rules cap is confirmed: the video must be under three minutes ([official rules](https://amazonappdev2026.devpost.com/rules)). The shot list below is the longer optional cut. If you record it, keep it under 3:00, and use the commands in `docs/DEVPOST.md` for the quiet-zone restart.
+
+**Target length:** 2:50, with a hard cap of 3:00.
 **Deadline:** Oct 23, 2026, 12:00 PM PT. Darren submits by hand. Nothing in this repo submits anything.
 **Honesty line (on screen and spoken):** the Alexa+ host, the voice and the store are simulated. The server, the checks and the receipts are real. Do not show or imply a live Alexa+ device.
 
@@ -16,7 +18,7 @@ Source A is checked against `demo/transcript.txt`. Every on-screen line below is
 
 ## Pre-flight (5 minutes)
 
-1. Run `npm ci && npm test`. All 56 tests must pass.
+1. Run `npm ci && npm test`. Every test must pass.
 2. Run `npm run demo`. It must end with `DEMO OK`.
 3. Terminal: font 20pt or larger, dark theme, about 100 columns, prompt shortened (`PS1='$ '`). Clear the scrollback.
 4. Browser for the phone page: open DevTools device mode at **390×844** (iPhone 12/13/14), or an actual phone on the same machine through a local-only connection. Do **not** use a public tunnel (README: no sign-in on `/mcp` yet).

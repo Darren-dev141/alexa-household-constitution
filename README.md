@@ -6,11 +6,47 @@ An MCP server that lets an assistant act for a family while keeping a short list
 - Medium things are reported afterwards.
 - Anything over the household's ask-first amount is put to a person first, with the real store price.
 - "Never" items, such as allergens, are refused outright.
+- A quiet zone holds every action until it lifts, including after a restart.
+
+## 60-second quickstart
+
+Node.js 22. From a clean clone:
+
+```
+npm ci
+npm test
+OWNER_KEY=home-demo-code npm start
+```
+
+MCP is at http://127.0.0.1:3000/mcp. The person who runs the home opens http://127.0.0.1:3000/owner and types `home-demo-code`.
+
+In a second terminal, from the same directory:
+
+```
+node demo/walk.js promise
+node demo/walk.js hold
+```
+
+On the owner page, tap **Okay** on the air fryer. Then:
+
+```
+node demo/walk.js allergen
+OWNER_KEY=home-demo-code node demo/walk.js zone
+```
+
+Stop the server with Ctrl-C. Leave the `data/` directory in place and start it again:
+
+```
+OWNER_KEY=home-demo-code npm start
+node demo/walk.js check
+```
+
+Dish soap, which would otherwise be ordered quietly, is held. The owner page says the clinic quiet zone is still on. `npm test` is the check; `npm run demo` runs the longer 10-scene script and exits non-zero if a scene misbehaves. Delete `data/` before a second recording so setup starts clean.
 
 ## What is real and what is simulated
 
 - **Real:** the MCP server (spec 2025-11-25, Streamable HTTP), the decision core, the receipt log and replay.
-- **Simulated:** the Alexa+ host and voice (`demo/run.js` uses the official MCP client), the store (`src/vendor.js` is a sandbox; no real merchant), and the assistant's choices in the demo.
+- **Simulated:** the Alexa+ host and voice (`demo/walk.js` and `demo/run.js` use the official MCP client), the store (`src/vendor.js` is a sandbox; no real merchant), and the assistant's choices in the demo.
 - **Not yet verified:** how Alexa+ itself handles the server's questions (MCP elicitation). That needs a live developer account.
 
 ## How the promises are enforced
@@ -24,20 +60,4 @@ An MCP server that lets an assistant act for a family while keeping a short list
 
 **Who approves what:** the device prompt can approve a substitution or a message, and the receipt records that. Spend over the ask-first limit, loosening a promise, first-run setup without a prompt, and other held orders need the person who runs the home. That route checks the owner key. The key is not written into receipts or error responses.
 
-## Verify
-
-```
-npm install
-npm test        # unit + end-to-end MCP tests
-npm run demo    # 10 scripted scenes against the real server; exits non-zero if any scene misbehaves
-```
-
-The demo writes `demo/transcript.txt`.
-
-## Run the server
-
-```
-OWNER_KEY=... npm start   # MCP at http://127.0.0.1:3000/mcp, parent's page at http://127.0.0.1:3000/owner
-```
-
-**Local only for now.** `/mcp` has no sign-in yet; OAuth 2.1 account linking is not built. The home code on `/owner` is a shared secret and is only safe over HTTPS. The server binds to 127.0.0.1. Do not put it behind a public tunnel until sign-in exists.
+**Local only for now.** `/mcp` has no sign-in yet; OAuth 2.1 account linking is not built. The home code on `/owner` is a shared secret and is only safe over HTTPS. The server binds to 127.0.0.1 and exits if `OWNER_KEY` is unset. Do not put it behind a public tunnel until sign-in exists.
