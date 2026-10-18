@@ -39,13 +39,14 @@ function toContract(p) {
     if (!Number.isInteger(qty) || qty < 1) throw new Error('quantity must be a whole number of at least 1');
     if (!Number.isInteger(p.unitCents) || p.unitCents < 0) throw new Error('price must be zero or more cents');
     if (!Array.isArray(p.allergens)) throw new Error('an order needs its allergen list');
+    if (!norm(p.requestedSku)) throw new Error('an order needs the sku that was asked for');
     return {
       kind: 'order',
       sku: norm(p.sku), name: norm(p.name),
       allergens: expandAllergens(p.allergens),
       qty, unitCents: p.unitCents, totalCents: qty * p.unitCents,
       address: norm(p.address), deliveryDate: p.deliveryDate,
-      requestedSku: norm(p.requestedSku ?? p.sku),
+      requestedSku: norm(p.requestedSku),
     };
   }
   if (p.kind === 'message') return { kind: 'message', to: norm(p.to), body: String(p.body) };

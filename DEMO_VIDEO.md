@@ -16,7 +16,7 @@ Source A is checked against `demo/transcript.txt`. Every on-screen line below is
 
 ## Pre-flight (5 minutes)
 
-1. Run `npm ci && npm test`. All 55 tests must pass.
+1. Run `npm ci && npm test`. All 56 tests must pass.
 2. Run `npm run demo`. It must end with `DEMO OK`.
 3. Terminal: font 20pt or larger, dark theme, about 100 columns, prompt shortened (`PS1='$ '`). Clear the scrollback.
 4. Browser for the phone page: open DevTools device mode at **390×844** (iPhone 12/13/14), or an actual phone on the same machine through a local-only connection. Do **not** use a public tunnel (README: no sign-in on `/mcp` yet).

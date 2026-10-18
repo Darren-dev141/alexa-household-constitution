@@ -49,8 +49,12 @@ function rig() {
   const constitution = core.setupConstitution('family', { spendConfirmCents: '75', blockedAllergens: 'peanuts', approvedContacts: 'mom' });
   return { gate: new Gate({ constitution, log, key }), exec: new Executor({ key, vendor: c => { sent.push(c); return { ok: 1 }; }, log }), sent, log };
 }
-const order = (o = {}) => ({ kind: 'order', sku: 'soap', name: 'Dish soap', qty: 1, unitCents: 399, address: '12 Elm St',
-  deliveryDate: '2026-10-24', allergens: [], ...o });
+const order = (o = {}) => {
+  const row = { kind: 'order', sku: 'soap', name: 'Dish soap', qty: 1, unitCents: 399, address: '12 Elm St',
+    deliveryDate: '2026-10-24', allergens: [], ...o };
+  if (row.requestedSku == null) row.requestedSku = row.sku;
+  return row;
+};
 
 // ---------------- quiet zones ----------------
 test('RT-01 venue quiet zone survives a server restart', async () => {
@@ -291,6 +295,12 @@ test('RT-14 a negative-quantity order cannot credit the 24h unasked-spend budget
 test('RT-15 core requires allergens and requestedSku on an order', () => {
   const p = order(); delete p.allergens;
   assert.throws(() => core.toContract({ ...p, sku: 'pb', name: 'Peanut butter' }), 'order with no allergen list passes the allergen rule');
+});
+
+test('RT-15b a direct toContract call with no requestedSku cannot skip substitution', () => {
+  const p = order({ sku: 'almond-milk-6', name: 'Almond milk' });
+  delete p.requestedSku;
+  assert.throws(() => core.toContract(p), /sku that was asked for/);
 });
 
 // ---------------- spoken money ----------------

@@ -20,8 +20,12 @@ function rig(answers = {}) {
   const exec = new Executor({ key, vendor, log, now });
   return { gate, exec, log, sent, advance: ms => { clock += ms; } };
 }
-const order = (o = {}) => ({ kind: 'order', sku: 'B0-OATMILK', name: 'Oat milk 6-pack', qty: 1, unitCents: 1899,
-  address: '12 Elm St', deliveryDate: '2026-10-15', allergens: [], ...o });
+const order = (o = {}) => {
+  const row = { kind: 'order', sku: 'B0-OATMILK', name: 'Oat milk 6-pack', qty: 1, unitCents: 1899,
+    address: '12 Elm St', deliveryDate: '2026-10-15', allergens: [], ...o };
+  if (row.requestedSku == null) row.requestedSku = row.sku;
+  return row;
+};
 const yes = { said: 'yes', speaker: 'darren', source: 'user-utterance' };
 
 test('setup: starter + at most 4 spoken questions, spoken money parses', () => {
