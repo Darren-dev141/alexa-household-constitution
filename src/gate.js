@@ -4,7 +4,7 @@
 // neither the gate key nor vendor credentials, so it cannot argue past a rule:
 // it never sees anything except the decision and the spoken prompt.
 const crypto = require('node:crypto');
-const { hashOf, toContract, evaluate, spokenPrompt, describe, TIER, norm } = require('./core');
+const { hashOf, toContract, evaluate, spokenPrompt, describe, TIER, norm, expandAllergens } = require('./core');
 
 const TOKEN_TTL_MS = 60_000;
 const YES = /^(yes|yeah|yep|sure|go ahead|do it|ok|okay)[.!]?$/;
@@ -171,7 +171,7 @@ class Gate {
     if (!ok) return { status: 'declined' };
     const old = this.constitution;
     const params = { ...old.params, ...p.amendment };
-    params.blockedAllergens = [...params.blockedAllergens].map(norm).sort();
+    params.blockedAllergens = expandAllergens(params.blockedAllergens);
     params.approvedContacts = [...params.approvedContacts].map(norm).sort();
     const body = { version: old.version + 1, starter: old.starter, params, prevHash: old.hash };
     const next = Object.freeze({ ...body, hash: hashOf(body) });

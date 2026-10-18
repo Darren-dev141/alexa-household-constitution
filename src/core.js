@@ -16,6 +16,21 @@ function canon(v) {
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 const hashOf = v => sha(canon(v));
 const norm = s => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+const ALLERGEN_CANON = {
+  peanut: ['peanuts'], peanuts: ['peanuts'],
+  'tree nut': ['tree nuts'], 'tree nuts': ['tree nuts'],
+  nut: ['peanuts', 'tree nuts'], nuts: ['peanuts', 'tree nuts'],
+  soy: ['soy'], soya: ['soy'], soybean: ['soy'], soybeans: ['soy'],
+};
+function expandAllergens(list) {
+  const out = [];
+  for (const raw of list || []) {
+    const n = norm(raw);
+    if (!n) continue;
+    out.push(...(ALLERGEN_CANON[n] || [n]));
+  }
+  return [...new Set(out)].sort();
+}
 
 // ---------- contract: the exact thing that will execute ----------
 function toContract(p) {
@@ -24,7 +39,7 @@ function toContract(p) {
     return {
       kind: 'order',
       sku: norm(p.sku), name: norm(p.name),
-      allergens: [...new Set((p.allergens || []).map(norm))].sort(),
+      allergens: expandAllergens(p.allergens),
       qty, unitCents: p.unitCents, totalCents: qty * p.unitCents,
       address: norm(p.address), deliveryDate: p.deliveryDate,
       requestedSku: norm(p.requestedSku ?? p.sku),
@@ -75,7 +90,7 @@ function setupConstitution(starter, answers = {}) {
     const a = answers[q.key];
     if (a !== undefined && !/^\s*skip\s*$/i.test(a)) params[q.key] = q.parse(a);
   }
-  params.blockedAllergens = params.blockedAllergens.map(norm).sort();
+  params.blockedAllergens = expandAllergens(params.blockedAllergens);
   params.approvedContacts = params.approvedContacts.map(norm).sort();
   const body = { version: 1, starter, params, prevHash: null };
   return Object.freeze({ ...body, hash: hashOf(body) });
@@ -122,5 +137,5 @@ function spokenPrompt(contract, ev) {
 
 function verifyConstitution(c) { const { hash, ...body } = c || {}; return !!hash && hashOf(body) === hash; }
 
-module.exports = { verifyConstitution, canon, sha, hashOf, norm, toContract, STARTERS, SETUP_QUESTIONS, parseSpokenMoney,
+module.exports = { verifyConstitution, canon, sha, hashOf, norm, expandAllergens, toContract, STARTERS, SETUP_QUESTIONS, parseSpokenMoney,
   parseSpokenList, setupConstitution, TIER, evaluate, money, describe, spokenPrompt };
