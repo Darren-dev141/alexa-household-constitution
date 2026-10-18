@@ -88,6 +88,8 @@ function buildMcp(home) {
     const draft = setupConstitution(a.home_type, answers); // validates; nothing saved yet
     // The household hears the promises read back and says yes; the assistant cannot set them up alone.
     if (!s.server.getClientCapabilities()?.elicitation) {
+      if (home.pendingSetup && home.now() - home.pendingSetup.at <= OWNER_WAIT_MS)
+        return text("Your home setup is already waiting for the person who runs your home to okay.");
       home.pendingSetup = { starter: a.home_type, answers, at: home.now() };
       return text("I've sent your home setup to the person who runs your home to okay.");
     }
