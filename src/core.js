@@ -65,18 +65,35 @@ const SETUP_QUESTIONS = [
 const WORDS = { zero:0, one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10, eleven:11,
   twelve:12, thirteen:13, fourteen:14, fifteen:15, sixteen:16, seventeen:17, eighteen:18, nineteen:19, twenty:20,
   thirty:30, forty:40, fifty:50, sixty:60, seventy:70, eighty:80, ninety:90 };
-function parseSpokenMoney(s) {
-  const t = norm(s).replace(/[$,]/g, '');
-  const m = t.match(/^(\d+)(?:\.(\d{1,2}))?/);
-  if (m) return Number(m[1]) * 100 + Number((m[2] || '0').padEnd(2, '0'));
+function wordsToNumber(phrase) {
+  const p = norm(phrase);
   let total = 0, cur = 0, seen = false;
-  for (const w of t.split(/[\s-]+/)) {
-    if (w in WORDS) { cur += WORDS[w]; seen = true; }
+  for (const w of p.split(/[\s-]+/)) {
+    if (!w || w === 'and' || w === 'a') continue;
+    if (/^\d+$/.test(w)) { cur += Number(w); seen = true; }
+    else if (w in WORDS) { cur += WORDS[w]; seen = true; }
     else if (w === 'hundred') { cur = (cur || 1) * 100; seen = true; }
     else if (w === 'thousand') { total += (cur || 1) * 1000; cur = 0; seen = true; }
+    else if (w === 'million') { total += (cur || 1) * 1_000_000; cur = 0; seen = true; }
+    else throw new Error('could not understand amount: ' + phrase);
   }
-  if (!seen) throw new Error('could not understand amount: ' + s);
-  return (total + cur) * 100;
+  if (!seen) throw new Error('could not understand amount: ' + phrase);
+  return total + cur;
+}
+function parseSpokenMoney(s) {
+  const t = norm(s).replace(/[$,]/g, '');
+  if (!t) throw new Error('could not understand amount: ' + s);
+  let m = t.match(/^(\d+)(?:\.(\d{1,2}))?\s+cents?$/);
+  if (m && !m[2]) return Number(m[1]);
+  m = t.match(/^(.*?)\s+dollars?\s+and\s+(.*?)\s+cents?$/);
+  if (m) return wordsToNumber(m[1]) * 100 + wordsToNumber(m[2]);
+  m = t.match(/^(.*?)\s+dollars?$/);
+  if (m) return wordsToNumber(m[1]) * 100;
+  m = t.match(/^(.*?)\s+cents?$/);
+  if (m) return wordsToNumber(m[1]);
+  m = t.match(/^(\d+)(?:\.(\d{1,2}))?$/);
+  if (m) return Number(m[1]) * 100 + Number((m[2] || '0').padEnd(2, '0'));
+  return wordsToNumber(t) * 100;
 }
 function parseSpokenList(s) {
   const t = norm(s);
