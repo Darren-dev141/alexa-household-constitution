@@ -49,8 +49,12 @@ function rig() {
   const constitution = core.setupConstitution('family', { spendConfirmCents: '75', blockedAllergens: 'peanuts', approvedContacts: 'mom' });
   return { gate: new Gate({ constitution, log, key }), exec: new Executor({ key, vendor: c => { sent.push(c); return { ok: 1 }; }, log }), sent, log };
 }
-const order = (o = {}) => ({ kind: 'order', sku: 'soap', name: 'Dish soap', qty: 1, unitCents: 399, address: '12 Elm St',
-  deliveryDate: '2026-10-24', allergens: [], ...o });
+const order = (o = {}) => {
+  const row = { kind: 'order', sku: 'soap', name: 'Dish soap', qty: 1, unitCents: 399, address: '12 Elm St',
+    deliveryDate: '2026-10-24', allergens: [], ...o };
+  if (row.requestedSku == null) row.requestedSku = row.sku;
+  return row;
+};
 
 // ---------------- quiet zones ----------------
 test('RT-01 venue quiet zone survives a server restart', async () => {
@@ -136,6 +140,89 @@ test('RT-08 a host that auto-answers the device prompt (or a child at the device
   } finally { await close(h, s.srv); }
 });
 
+async function setupWithKey(ownerKey) {
+  const s = await start({ ownerKey });
+  const h = await connect(s.base, { canAsk: true, answers: [true] });
+  await h.call('finish_setup', { home_type: 'family', ask_first_amount: '75', allergies: 'peanuts', trusted_contacts: 'mom' });
+  await h.client.close();
+  return s;
+}
+const ownerFetch = (base, p, key, method = 'GET') => fetch(base + p, { method, headers: { 'x-owner-key': key, 'content-type': 'application/json' } });
+
+test('RT-08a a device-prompt yes on an order over the ask-first limit is held', async () => {
+  const s = await setupHome();
+  const h = await connect(s.base, { canAsk: true, answers: [true, true] });
+  try {
+    const say = await h.call('place_order', { item: 'air fryer' }); // $89.99: over $75, under 2×
+    assert.match(say, /sent that to the person who runs your home/);
+    assert.strictEqual(s.home.sent.length, 0, 'device yes bought an order over the ask-first limit');
+    const pend = await ownerGet(s.base, '/owner/pending');
+    assert.strictEqual(pend.actions.length, 1);
+    assert.match(pend.actions[0].what, /\$89\.99/);
+    for (let i = 0; i < 3; i++) await h.call('place_order', { item: 'paper towels' }); // 3 × $24.99 = $74.97
+    const fourth = await h.call('place_order', { item: 'paper towels' }); // day total would be $99.96
+    assert.match(fourth, /sent that to the person who runs your home/);
+    assert.strictEqual(s.home.sent.length, 3, 'device yes approved spend over the ask-first limit');
+  } finally { await close(h, s.srv); }
+});
+
+test('RT-08b correct owner proof approves an over-limit order', async () => {
+  const proof = crypto.randomBytes(18).toString('hex');
+  const s = await setupWithKey(proof);
+  const h = await connect(s.base, { canAsk: true, answers: [true] });
+  try {
+    await h.call('place_order', { item: 'air fryer' });
+    assert.strictEqual(s.home.sent.length, 0);
+    const id = (await (await ownerFetch(s.base, '/owner/pending', proof)).json()).actions[0].id;
+    const r = await (await ownerFetch(s.base, '/owner/approve/' + id, proof, 'POST')).json();
+    assert.strictEqual(r.status, 'executed');
+    assert.strictEqual(s.home.sent.length, 1);
+    assert.strictEqual(s.home.log.entries().find(e => e.approval === 'yes').approver, 'decision-maker (phone)');
+  } finally { await close(h, s.srv); }
+});
+
+test('RT-08c wrong owner proof does not approve an over-limit order', async () => {
+  const proof = crypto.randomBytes(18).toString('hex');
+  const wrong = crypto.randomBytes(18).toString('hex');
+  const s = await setupWithKey(proof);
+  const h = await connect(s.base, { canAsk: true, answers: [true] });
+  try {
+    await h.call('place_order', { item: 'air fryer' });
+    const id = (await (await ownerFetch(s.base, '/owner/pending', proof)).json()).actions[0].id;
+    const res = await ownerFetch(s.base, '/owner/approve/' + id, wrong, 'POST');
+    assert.strictEqual(res.status, 401);
+    assert.strictEqual(s.home.sent.length, 0);
+    assert.strictEqual((await (await ownerFetch(s.base, '/owner/pending', proof)).json()).actions.length, 1);
+  } finally { await close(h, s.srv); }
+});
+
+test('RT-08d owner proof never appears in logs or errors', async () => {
+  const proof = crypto.randomBytes(18).toString('hex');
+  const wrong = crypto.randomBytes(18).toString('hex');
+  const lines = [];
+  const wrap = fn => (...a) => { lines.push(a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ')); return fn.apply(console, a); };
+  const log = console.log, err = console.error, warn = console.warn;
+  console.log = wrap(log); console.error = wrap(err); console.warn = wrap(warn);
+  const secrets = [proof, wrong];
+  const leaked = (label, text) => assert.ok(!secrets.some(s => String(text).includes(s)), 'owner proof appeared in ' + label);
+  try {
+    const s = await setupWithKey(proof);
+    const h = await connect(s.base, { canAsk: true, answers: [true] });
+    try {
+      leaked('assistant reply', await h.call('place_order', { item: 'air fryer' }));
+      const id = (await (await ownerFetch(s.base, '/owner/pending', proof)).json()).actions[0].id;
+      const denied = await ownerFetch(s.base, '/owner/approve/' + id, wrong, 'POST');
+      leaked('error response', await denied.text());
+      const approved = await ownerFetch(s.base, '/owner/approve/' + id, proof, 'POST');
+      leaked('approve response', await approved.text());
+      leaked('receipt log', JSON.stringify(s.home.log.entries()));
+      leaked('receipt file', fs.readFileSync(path.join(s.dataDir, 'receipts.jsonl'), 'utf8'));
+      leaked('household file', fs.readFileSync(path.join(s.dataDir, 'household.json'), 'utf8'));
+      for (const line of lines) leaked('console', line);
+    } finally { await close(h, s.srv); }
+  } finally { console.log = log; console.error = err; console.warn = warn; }
+});
+
 test('RT-09 owner approves the setup they saw, not one swapped in after', async () => {
   const s = await start();
   const h = await connect(s.base, { canAsk: false });
@@ -208,6 +295,12 @@ test('RT-14 a negative-quantity order cannot credit the 24h unasked-spend budget
 test('RT-15 core requires allergens and requestedSku on an order', () => {
   const p = order(); delete p.allergens;
   assert.throws(() => core.toContract({ ...p, sku: 'pb', name: 'Peanut butter' }), 'order with no allergen list passes the allergen rule');
+});
+
+test('RT-15b a direct toContract call with no requestedSku cannot skip substitution', () => {
+  const p = order({ sku: 'almond-milk-6', name: 'Almond milk' });
+  delete p.requestedSku;
+  assert.throws(() => core.toContract(p), /sku that was asked for/);
 });
 
 // ---------------- spoken money ----------------

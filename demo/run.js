@@ -59,12 +59,18 @@ const heard = t => { assert.doesNotMatch(t, JARGON, 'jargon reached the househol
     assert.match(await call('place_order', { item: 'paper towels', quantity: 2 }, 'Get two packs of paper towels.'), /^Done: I ordered/);
 
     await scene('4. Splitting it up still gets asked');
-    answers.push({ yes: false });
-    assert.match(await call('place_order', { item: 'paper towels', quantity: 1 }, 'Actually, one more pack.'), /Okay, I won't/);
+    assert.match(await call('place_order', { item: 'paper towels', quantity: 1 }, 'Actually, one more pack.'), /sent that to the person who runs your home/);
+    const split = await owner('/owner/pending');
+    say('Parent', `(phone) ${split.actions[0].why[0]} → No`);
+    assert.strictEqual((await owner('/owner/decline/' + split.actions[0].id, 'POST')).status, 'declined');
 
-    await scene('5. Big stuff: asked first, with the real price');
-    answers.push({ yes: true });
-    assert.match(await call('place_order', { item: 'oat milk', quantity: 5 }, 'Stock up on oat milk, five packs.'), /Here's what I did/);
+    await scene('5. Big stuff: the person who runs the home, with the real price');
+    assert.match(await call('place_order', { item: 'oat milk', quantity: 5 }, 'Stock up on oat milk, five packs.'), /sent that to the person who runs your home/);
+    const milk = await owner('/owner/pending');
+    say('Parent', `(phone) ${milk.actions[0].what} → Yes`);
+    const bought = await owner('/owner/approve/' + milk.actions[0].id, 'POST');
+    assert.strictEqual(bought.status, 'executed');
+    say('Assistant', heard(bought.say));
 
     await scene('6. The store swaps in something the family said never');
     home.vendor.setSubstitute('oat-milk-6', 'almond-milk-6');
@@ -72,8 +78,13 @@ const heard = t => { assert.doesNotMatch(t, JARGON, 'jargon reached the househol
     home.vendor.setSubstitute('oat-milk-6', null);
 
     await scene('7. The price changes after the yes');
-    answers.push({ yes: true, before: () => home.vendor.setPrice('air-fryer', 10999) });
-    assert.match(await call('place_order', { item: 'air fryer', quantity: 1 }, 'Order the air fryer we looked at.'), /stopped before paying/);
+    assert.match(await call('place_order', { item: 'air fryer', quantity: 1 }, 'Order the air fryer we looked at.'), /sent that to the person who runs your home/);
+    const fry = await owner('/owner/pending');
+    say('Parent', `(phone) ${fry.actions[0].what} → Yes`);
+    home.vendor.setPrice('air-fryer', 10999);
+    const stopped = await owner('/owner/approve/' + fry.actions[0].id, 'POST');
+    assert.strictEqual(stopped.status, 'blocked');
+    say('Assistant', heard(stopped.say));
 
     await scene('8. The assistant tries to approve its own order (staged)');
     const tools = (await client.listTools()).tools.map(t => t.name);

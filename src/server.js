@@ -2,10 +2,12 @@
 // MCP Streamable HTTP server (spec 2025-11-25) wrapping the gate.
 // Capability model: the assistant can only ACT through these tools, and the
 // server executes itself — the assistant never holds an approval or vendor creds.
-// There is NO tool the assistant can call to say yes. An ask-first action is put to
-// the person through the host's own prompt (MCP elicitation); if the host cannot ask,
-// it goes to the decision-maker (owner-only HTTP route, stand-in for their phone),
-// which no MCP tool can reach. Loosening a promise always goes to the decision-maker.
+// There is NO tool the assistant can call to say yes. An ask-first action that is not
+// spend over the limit is put to the person through the host's own prompt (MCP
+// elicitation). Spend over the ask-first limit always goes to the decision-maker, and
+// so does any ask the host cannot put to the person (owner-only HTTP route, stand-in
+// for their phone). No MCP tool can reach that route. Loosening a promise always
+// goes to the decision-maker.
 const path = require('node:path'), fs = require('node:fs'), crypto = require('node:crypto');
 const express = require('express');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
@@ -166,8 +168,7 @@ function buildMcp(home) {
     if (r.status === 'confirm') {
       const held = home.gate.pending.get(r.pendingId);
       home.heldActions.set(r.pendingId, { contract: held.contract, why: held.why, quoteId, at: home.now() });
-      const ownerOnly = held.contract.kind === 'order'
-        && held.contract.totalCents > 2 * home.gate.constitution.params.spendConfirmCents;
+      const ownerOnly = held.contract.kind === 'order' && held.base.rules.includes('spend');
       if (ownerOnly || !s.server.getClientCapabilities()?.elicitation)
         return text("I've sent that to the person who runs your home to okay. Nothing happens until they do.");
       let answer;
@@ -348,9 +349,10 @@ function createApp(opts) {
 }
 
 if (require.main === module) {
-  const ownerKey = process.env.OWNER_KEY || crypto.randomBytes(16).toString('hex');
+  const ownerKey = process.env.OWNER_KEY;
+  if (!ownerKey) { console.error('Set OWNER_KEY before starting.'); process.exit(1); }
   const { app } = createApp({ dataDir: path.join(__dirname, '..', 'data'), ownerKey });
   const port = Number(process.env.PORT || 3000);
-  app.listen(port, '127.0.0.1', () => console.log(`household-promises MCP on http://127.0.0.1:${port}/mcp (owner key ${process.env.OWNER_KEY ? 'from env' : 'generated: ' + ownerKey})`));
+  app.listen(port, '127.0.0.1', () => console.log(`household-promises MCP on http://127.0.0.1:${port}/mcp`));
 }
 module.exports = { createApp, promisesText };

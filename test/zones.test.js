@@ -21,8 +21,12 @@ function rig() {
   const exec = new Executor({ key, vendor, log });
   return { gate, exec, log, sent };
 }
-const order = (o = {}) => ({ kind: 'order', sku: 'B0-SOAP', name: 'Dish soap', qty: 1, unitCents: 399,
-  address: '12 Elm St', deliveryDate: '2026-10-24', allergens: [], ...o });
+const order = (o = {}) => {
+  const row = { kind: 'order', sku: 'B0-SOAP', name: 'Dish soap', qty: 1, unitCents: 399,
+    address: '12 Elm St', deliveryDate: '2026-10-24', allergens: [], ...o };
+  if (row.requestedSku == null) row.requestedSku = row.sku;
+  return row;
+};
 
 test('zone: a venue quiet zone holds even a tiny order — no token, no side effect, hold is receipted', () => {
   const { gate, exec, log, sent } = rig();

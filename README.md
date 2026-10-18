@@ -16,13 +16,13 @@ An MCP server that lets an assistant act for a family while keeping a short list
 ## How the promises are enforced
 
 - **The assistant can only act through this server's tools.** The server executes orders itself, and the assistant never holds an approval.
-- **No tool means "yes".** An ask-first order is put to the person through the host's own prompt (MCP elicitation). If the host can't ask, the order is held for the person who runs the home (an owner-only web route, standing in for their phone).
+- **No tool means "yes".** An ask that is not about spend is put to the person through the host's own prompt (MCP elicitation). Anything over the ask-first limit is held for the person who runs the home (an owner-only web route, standing in for their phone). A yes on the device does not place it. If the host can't ask, every ask-first action is held the same way.
 - **The assistant cannot set up the home or loosen a promise.** First-run setup is read back and confirmed the same way. Loosening a promise always goes to the person who runs the home. Tightening one applies right away.
 - **The store sets the price, product and allergens, not the assistant.** Checkout re-reads the order, and stops if anything changed after the yes.
 - **Splitting an order doesn't avoid the ask.** Orders made without asking in the last 24 hours count toward the ask-first amount.
 - **Every decision is logged in a hash-chained, tamper-evident receipt log: edits to past entries are detected, though someone with disk access could rewrite the whole chain.** Each logged decision replays to the same outcome. A tampered promises file or log stops the server from starting.
 
-**Who approves what:** an ask-first prompt is answered by whoever is at the device, and the receipt records that. Promise changes, first-run setup without a prompt, and held orders need the person who runs the home.
+**Who approves what:** the device prompt can approve a substitution or a message, and the receipt records that. Spend over the ask-first limit, loosening a promise, first-run setup without a prompt, and other held orders need the person who runs the home. That route checks the owner key. The key is not written into receipts or error responses.
 
 ## Verify
 
