@@ -71,12 +71,37 @@ class Gate {
   confirm(pendingId, { said, speaker, source }) {
     const p = this.pending.get(pendingId);
     if (!p) return { status: 'expired' };
-    this.pending.delete(pendingId);
-    if (source !== 'user-utterance') return { status: 'rejected', say: 'Only a person in the household can approve that.' };
+    if (source !== 'user-utterance') {
+      this.pending.delete(pendingId);
+      return { status: 'rejected', say: 'Only a person in the household can approve that.' };
+    }
     const saidNorm = norm(said);
     const yes = YES.test(saidNorm) && !NEGATION.test(saidNorm);
-    const r = this.log.append({ ...p.base, decision: yes ? 'allowed' : 'declined', approval: yes ? 'yes' : 'no', approver: speaker });
-    return yes ? { status: 'approved', token: this.token(p.contractHash), receipt: r.seq } : { status: 'declined', receipt: r.seq };
+    if (!yes) {
+      this.pending.delete(pendingId);
+      const r = this.log.append({ ...p.base, decision: 'declined', approval: 'no', approver: speaker });
+      return { status: 'declined', receipt: r.seq };
+    }
+    if (this.zones.size) {
+      const zone = [...this.zones.values()][0];
+      this.log.append({ type: 'zone', decision: 'held', zone: zone.name, setBy: zone.setBy,
+        constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash,
+        contract: p.contract, contractHash: p.contractHash });
+      return { status: 'held', zone: zone.name, say: `I'm in a quiet zone right now, so I can't do that. I've written it down.` };
+    }
+    const recentCents = p.contract.kind === 'order' ? this.recentUnaskedSpend() : 0;
+    const ev = evaluate(p.contract, this.constitution, { recentCents });
+    if (ev.tier === TIER.REFUSE) {
+      this.pending.delete(pendingId);
+      const r = this.log.append({ type: 'decision', constitutionVersion: this.constitution.version,
+        constitutionHash: this.constitution.hash, contract: p.contract, contractHash: p.contractHash,
+        tier: ev.tier, recentCents, rules: ev.reasons.map(x => x.rule), decision: 'refused',
+        approval: null, approver: 'household rules' });
+      return { status: 'refused', say: `I won't ${describe(p.contract)}: ${ev.reasons.filter(x => x.rule === 'allergen').map(x => x.say).join('; ')}.`, receipt: r.seq };
+    }
+    this.pending.delete(pendingId);
+    const r = this.log.append({ ...p.base, decision: 'allowed', approval: 'yes', approver: speaker });
+    return { status: 'approved', token: this.token(p.contractHash), receipt: r.seq };
   }
 
   // Quiet Zones (Portable Constitution, venue-side): while a zone is active,

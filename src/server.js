@@ -47,9 +47,14 @@ function createHome({ dataDir, ownerKey, vendor = new SandboxVendor(), address =
   home.approveHeld = (id, { approve, speaker }) => {
     const held = home.heldActions.get(id);
     if (!held) return { status: 'missing' };
-    home.heldActions.delete(id);
-    if (home.now() - held.at > OWNER_WAIT_MS) { home.gate.pending.delete(id); return { status: 'expired' }; }
+    if (home.now() - held.at > OWNER_WAIT_MS) {
+      home.heldActions.delete(id);
+      home.gate.pending.delete(id);
+      return { status: 'expired' };
+    }
     const r = home.gate.confirm(id, { said: approve ? 'yes' : 'no', speaker, source: 'user-utterance' });
+    if (r.status === 'held') return { status: 'held', say: r.say };
+    home.heldActions.delete(id);
     if (r.status !== 'approved') return { status: r.status };
     const done = home.exec.execute(home.checkout(held.quoteId, held.contract), r.token);
     return done.status === 'executed' ? { status: 'executed', say: "Done. Here's what I did: " + describe(held.contract) + '.' }
