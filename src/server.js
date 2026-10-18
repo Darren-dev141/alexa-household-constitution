@@ -308,6 +308,12 @@ function createApp(opts) {
     home.gate.pending.delete(id);
     res.json({ status: 'declined' });
   });
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    const parse = err.type === 'entity.parse.failed' || (err instanceof SyntaxError && err.status === 400);
+    res.status(parse ? 400 : 500).json({ jsonrpc: '2.0',
+      error: { code: parse ? -32700 : -32603, message: parse ? 'Parse error' : 'Internal error' }, id: null });
+  });
   return { app, home };
 }
 
