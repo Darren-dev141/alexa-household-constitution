@@ -276,7 +276,9 @@ function createApp(opts) {
   // the assistant cannot call it. In production the venue would hold its own
   // credential; tonight the owner key is the stand-in.
   app.post('/venue/zone', (req, res) => {
-    if (!owner(req, res)) return;
+    const k = String(req.get('x-owner-key') || '');
+    const ok = k.length === home.ownerKey.length && crypto.timingSafeEqual(Buffer.from(k), Buffer.from(home.ownerKey));
+    if (!ok) return res.status(401).end();
     if (!home.gate) return res.status(404).end();
     const { name, active } = req.body || {};
     res.json(home.gate.zoneEvent({ name, active: !!active, source: 'venue-signal' }));
