@@ -28,15 +28,19 @@ function createHome({ dataDir, ownerKey, vendor = new SandboxVendor(), address =
   vendor.address = address;
   const home = { log, vendor, sent: vendor.orders, gate: null, ownerKey, now, amendments: new Map(), heldActions: new Map(),
     exec: new Executor({ key, vendor: c => vendor.commit(c), log }) };
-  const save = () => fs.writeFileSync(stateFile, JSON.stringify({ address, current: home.gate.constitution.hash, versions: home.gate.versions }, null, 1));
+  const save = () => fs.writeFileSync(stateFile, JSON.stringify({
+    address, current: home.gate.constitution.hash, versions: home.gate.versions,
+    zones: [...home.gate.zones.entries()],
+  }, null, 1));
   if (fs.existsSync(stateFile)) { // restart: reload, and refuse to run on a tampered or broken chain
     const st = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     for (const v of Object.values(st.versions)) if (!verifyConstitution(v)) throw new Error('household promises file was altered; refusing to start');
     const chk = log.verify(); if (!chk.ok) throw new Error('receipt log altered at entry ' + chk.at + '; refusing to start');
-    home.gate = new Gate({ constitution: st.versions[st.current], versions: st.versions, log, key, onAdopt: () => save() });
+    home.gate = new Gate({ constitution: st.versions[st.current], versions: st.versions, log, key,
+      zones: st.zones, onZone: () => save(), onAdopt: () => save() });
   }
   home.setup = (starter, answers) => {
-    home.gate = new Gate({ constitution: setupConstitution(starter, answers), log, key, onAdopt: () => save() });
+    home.gate = new Gate({ constitution: setupConstitution(starter, answers), log, key, onZone: () => save(), onAdopt: () => save() });
     save();
   };
   home.checkout = (quoteId, fallback) => quoteId ? vendor.finalize(quoteId) : fallback;
@@ -127,7 +131,7 @@ function buildMcp(home) {
 
   async function decide(p, quoteId) {
     const r = home.gate.propose(p);
-    if (r.status === 'refused') return text(r.say);
+    if (r.status === 'held' || r.status === 'refused') return text(r.say);
     if (r.status === 'confirm') {
       const held = home.gate.pending.get(r.pendingId);
       home.heldActions.set(r.pendingId, { contract: held.contract, why: held.why, quoteId, at: home.now() });

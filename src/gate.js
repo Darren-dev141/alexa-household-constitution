@@ -13,9 +13,11 @@ const YES_LOOSEN = /^yes,? change it[.!]?$/;
 const NEGATION = /\b(no|not|never|cancel|don't|dont)\b/;
 
 class Gate {
-  constructor({ constitution, log, key, now = Date.now, versions, onAdopt }) {
+  constructor({ constitution, log, key, now = Date.now, versions, onAdopt, zones, onZone }) {
     this.key = key; this.log = log; this.now = now;
-    this.versions = { ...(versions || {}) }; this.pending = new Map(); this.zones = new Map();
+    this.versions = { ...(versions || {}) }; this.pending = new Map();
+    this.zones = new Map(zones || []);
+    this.onZone = onZone;
     this.adopt(constitution);
     this.onAdopt = onAdopt;
   }
@@ -117,7 +119,11 @@ class Gate {
     const setBy = source === 'venue-signal' ? 'venue' : 'household';
     const base = { type: 'zone', zone: z, constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash };
     if (active) {
-      if (!this.zones.has(z)) { this.zones.set(z, { name: z, setBy }); this.log.append({ ...base, decision: 'entered', setBy }); }
+      if (!this.zones.has(z)) {
+        this.zones.set(z, { name: z, setBy });
+        this.log.append({ ...base, decision: 'entered', setBy });
+        if (this.onZone) this.onZone();
+      }
       return { status: 'entered', zone: z, say: `Quiet zone on for ${z}. I'll hold anything I'm asked to do until it lifts.` };
     }
     const cur = this.zones.get(z);
@@ -128,6 +134,7 @@ class Gate {
     }
     this.zones.delete(z);
     this.log.append({ ...base, decision: 'exited', setBy: cur.setBy });
+    if (this.onZone) this.onZone();
     return { status: 'exited', zone: z, say: `Quiet zone off for ${z}.` };
   }
 
