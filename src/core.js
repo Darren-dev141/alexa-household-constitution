@@ -98,7 +98,8 @@ function parseSpokenMoney(s) {
 function parseSpokenList(s) {
   const t = norm(s);
   if (!t || /^(none|no|nothing|nobody|skip)$/.test(t)) return [];
-  return t.split(/\s*(?:,|\band\b)\s*/).map(norm).filter(Boolean);
+  return t.split(/\s*(?:,|;|\/|&|\band\b|\bor\b|\bplus\b)\s*/)
+    .map(x => norm(x).replace(/^(?:no|please)\s+/, '')).filter(Boolean);
 }
 function setupConstitution(starter, answers = {}) {
   if (!STARTERS[starter]) throw new Error('unknown starter: ' + starter);
