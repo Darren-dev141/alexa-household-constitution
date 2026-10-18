@@ -28,14 +28,44 @@ function createHome({ dataDir, ownerKey, vendor = new SandboxVendor(), address =
   vendor.address = address;
   const home = { log, vendor, sent: vendor.orders, gate: null, ownerKey, now, amendments: new Map(), heldActions: new Map(),
     exec: new Executor({ key, vendor: c => vendor.commit(c), log }) };
-  const save = () => fs.writeFileSync(stateFile, JSON.stringify({
-    address, current: home.gate.constitution.hash, versions: home.gate.versions,
-    zones: [...home.gate.zones.entries()],
-  }, null, 1));
+  const macOf = h => crypto.createHmac('sha256', key).update(h).digest('hex');
+  const altered = () => { throw new Error('household promises file was altered; refusing to start'); };
+  const promisesIntact = st => {
+    const versions = st.versions || {}, list = Object.values(versions);
+    if (!list.length || !versions[st.current]) altered();
+    for (const v of list) {
+      if (!verifyConstitution(v)) altered();
+      const expected = macOf(v.hash), mac = st.macs && st.macs[v.hash];
+      if (typeof mac !== 'string' || mac.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) altered();
+    }
+    const pointed = new Set(list.map(v => v.prevHash).filter(Boolean));
+    const heads = list.filter(v => !pointed.has(v.hash));
+    if (heads.length !== 1 || heads[0].hash !== st.current) altered();
+    const seen = new Set();
+    let cur = versions[st.current];
+    while (cur) {
+      if (seen.has(cur.hash)) altered();
+      seen.add(cur.hash);
+      if (!cur.prevHash) break;
+      if (!versions[cur.prevHash]) altered();
+      cur = versions[cur.prevHash];
+    }
+    if (seen.size !== list.length) altered();
+    const applied = log.entries().filter(e => e.type === 'amendment' && e.decision === 'applied');
+    if (applied.length && applied[applied.length - 1].constitutionHash !== st.current) altered();
+  };
+  const save = () => {
+    const versions = home.gate.versions, macs = {};
+    for (const h of Object.keys(versions)) macs[h] = macOf(h);
+    fs.writeFileSync(stateFile, JSON.stringify({
+      address, current: home.gate.constitution.hash, versions, macs,
+      zones: [...home.gate.zones.entries()],
+    }, null, 1));
+  };
   if (fs.existsSync(stateFile)) { // restart: reload, and refuse to run on a tampered or broken chain
     const st = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    for (const v of Object.values(st.versions)) if (!verifyConstitution(v)) throw new Error('household promises file was altered; refusing to start');
     const chk = log.verify(); if (!chk.ok) throw new Error('receipt log altered at entry ' + chk.at + '; refusing to start');
+    promisesIntact(st);
     home.gate = new Gate({ constitution: st.versions[st.current], versions: st.versions, log, key,
       zones: st.zones, onZone: () => save(), onAdopt: () => save() });
   }
