@@ -119,7 +119,8 @@ class Gate {
     const setBy = source === 'venue-signal' ? 'venue' : 'household';
     const base = { type: 'zone', zone: z, constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash };
     if (active) {
-      if (!this.zones.has(z)) {
+      const cur = this.zones.get(z);
+      if (!cur || (setBy === 'venue' && cur.setBy !== 'venue')) {
         this.zones.set(z, { name: z, setBy });
         this.log.append({ ...base, decision: 'entered', setBy });
         if (this.onZone) this.onZone();
