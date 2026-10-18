@@ -235,10 +235,10 @@ function createApp(opts) {
     next();
   });
   app.use(express.json());
-  const sessions = {};
+  const sessions = new Map();
   app.post('/mcp', async (req, res) => {
     const sid = req.get('mcp-session-id');
-    let t = sid && sessions[sid];
+    let t = sid && sessions.get(sid);
     if (!t) {
       if (sid) return res.status(404).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Session not found' }, id: null });
       if (!isInitializeRequest(req.body)) {
@@ -250,14 +250,14 @@ function createApp(opts) {
         await srv.connect(st);
         return st.handleRequest(req, res, req.body);
       }
-      t = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID(), onsessioninitialized: id => { sessions[id] = t; } });
-      t.onclose = () => { if (t.sessionId) delete sessions[t.sessionId]; };
+      t = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID(), onsessioninitialized: id => { sessions.set(id, t); } });
+      t.onclose = () => { if (t.sessionId) sessions.delete(t.sessionId); };
       await buildMcp(home).connect(t);
     }
     await t.handleRequest(req, res, req.body);
   });
   const bySession = async (req, res) => {
-    const t = sessions[req.get('mcp-session-id')];
+    const t = sessions.get(req.get('mcp-session-id'));
     if (!t) return res.status(404).end();
     await t.handleRequest(req, res);
   };
