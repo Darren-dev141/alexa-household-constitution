@@ -7,6 +7,10 @@ const crypto = require('node:crypto');
 const { hashOf, toContract, evaluate, spokenPrompt, describe, TIER, norm } = require('./core');
 
 const TOKEN_TTL_MS = 60_000;
+const YES = /^(yes|yeah|yep|sure|go ahead|do it|ok|okay)[.!]?$/;
+const YES_PLAIN = /^(yes|yeah|yep|sure|ok|okay)[.!]?$/;
+const YES_LOOSEN = /^yes,? change it[.!]?$/;
+const NEGATION = /\b(no|not|never|cancel|don't|dont)\b/;
 
 class Gate {
   constructor({ constitution, log, key, now = Date.now, versions, onAdopt }) {
@@ -69,7 +73,8 @@ class Gate {
     if (!p) return { status: 'expired' };
     this.pending.delete(pendingId);
     if (source !== 'user-utterance') return { status: 'rejected', say: 'Only a person in the household can approve that.' };
-    const yes = /^(yes|yeah|yep|sure|go ahead|do it|ok|okay)\b/i.test(norm(said));
+    const saidNorm = norm(said);
+    const yes = YES.test(saidNorm) && !NEGATION.test(saidNorm);
     const r = this.log.append({ ...p.base, decision: yes ? 'allowed' : 'declined', approval: yes ? 'yes' : 'no', approver: speaker });
     return yes ? { status: 'approved', token: this.token(p.contractHash), receipt: r.seq } : { status: 'declined', receipt: r.seq };
   }
@@ -129,7 +134,7 @@ class Gate {
     if (!p || !p.amendment) return { status: 'expired' };
     this.pending.delete(pendingId);
     const s = norm(said);
-    const ok = source === 'user-utterance' && (p.loosens ? /^yes,? change it\b/.test(s) : /^(yes|yeah|yep|sure|ok|okay)\b/.test(s));
+    const ok = source === 'user-utterance' && !NEGATION.test(s) && (p.loosens ? YES_LOOSEN.test(s) : YES_PLAIN.test(s));
     if (!ok) return { status: 'declined' };
     const old = this.constitution;
     const params = { ...old.params, ...p.amendment };
