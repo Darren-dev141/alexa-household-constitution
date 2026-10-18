@@ -41,7 +41,10 @@ class Gate {
   // Agent proposes. Returns what Alexa should do next.
   propose(proposal) {
     const t0 = process.hrtime.bigint();
-    const contract = toContract(proposal), contractHash = hashOf(contract);
+    let contract;
+    try { contract = toContract(proposal); }
+    catch (e) { return { status: 'refused', say: e.message }; }
+    const contractHash = hashOf(contract);
     if (this.zones.size) {
       const zone = [...this.zones.values()][0];
       const r = this.log.append({ type: 'zone', decision: 'held', zone: zone.name, setBy: zone.setBy,

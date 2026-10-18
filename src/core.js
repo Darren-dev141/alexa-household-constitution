@@ -36,6 +36,9 @@ function expandAllergens(list) {
 function toContract(p) {
   if (p.kind === 'order') {
     const qty = p.qty ?? 1;
+    if (!Number.isInteger(qty) || qty < 1) throw new Error('quantity must be a whole number of at least 1');
+    if (!Number.isInteger(p.unitCents) || p.unitCents < 0) throw new Error('price must be zero or more cents');
+    if (!Array.isArray(p.allergens)) throw new Error('an order needs its allergen list');
     return {
       kind: 'order',
       sku: norm(p.sku), name: norm(p.name),
