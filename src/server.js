@@ -185,9 +185,25 @@ function buildMcp(home) {
   return s;
 }
 
+function localName(host) {
+  return String(host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+}
 function createApp(opts) {
   const home = createHome(opts);
   const app = express();
+  app.use((req, res, next) => {
+    if (req.path !== '/mcp') return next();
+    const host = localName(req.headers.host);
+    if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1')
+      return res.status(403).json({ jsonrpc: '2.0', error: { code: -32000, message: 'forbidden host' }, id: null });
+    if (req.headers.origin) {
+      let name = '';
+      try { name = new URL(req.headers.origin).hostname; } catch { /* foreign */ }
+      if (name !== '127.0.0.1' && name !== 'localhost' && name !== '::1')
+        return res.status(403).json({ jsonrpc: '2.0', error: { code: -32000, message: 'forbidden origin' }, id: null });
+    }
+    next();
+  });
   app.use(express.json());
   const sessions = {};
   app.post('/mcp', async (req, res) => {
