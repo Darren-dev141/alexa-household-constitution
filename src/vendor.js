@@ -27,7 +27,8 @@ class SandboxVendor {
   find(spoken) {
     const s = norm(spoken).replace(/^(some|a|an|the|more)\s+/, '');
     for (const i of this.items.values()) if (i.aliases.includes(s) || norm(i.name) === s) return i;
-    for (const i of this.items.values()) if (i.aliases.some(a => s.includes(a))) return i;
+    const word = a => new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+    for (const i of this.items.values()) if ([...i.aliases, norm(i.name)].some(a => word(a).test(s))) return i;
     return null;
   }
   line(requested, qty) {
