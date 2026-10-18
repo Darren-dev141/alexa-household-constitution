@@ -4,14 +4,20 @@
 // neither the gate key nor vendor credentials, so it cannot argue past a rule:
 // it never sees anything except the decision and the spoken prompt.
 const crypto = require('node:crypto');
-const { hashOf, toContract, evaluate, spokenPrompt, describe, TIER, norm } = require('./core');
+const { hashOf, toContract, evaluate, spokenPrompt, describe, TIER, norm, expandAllergens } = require('./core');
 
 const TOKEN_TTL_MS = 60_000;
+const YES = /^(yes|yeah|yep|sure|go ahead|do it|ok|okay)[.!]?$/;
+const YES_PLAIN = /^(yes|yeah|yep|sure|ok|okay)[.!]?$/;
+const YES_LOOSEN = /^yes,? change it[.!]?$/;
+const NEGATION = /\b(no|not|never|cancel|don't|dont)\b/;
 
 class Gate {
-  constructor({ constitution, log, key, now = Date.now, versions, onAdopt }) {
+  constructor({ constitution, log, key, now = Date.now, versions, onAdopt, zones, onZone }) {
     this.key = key; this.log = log; this.now = now;
-    this.versions = { ...(versions || {}) }; this.pending = new Map(); this.zones = new Map();
+    this.versions = { ...(versions || {}) }; this.pending = new Map();
+    this.zones = new Map(zones || []);
+    this.onZone = onZone;
     this.adopt(constitution);
     this.onAdopt = onAdopt;
   }
@@ -35,7 +41,10 @@ class Gate {
   // Agent proposes. Returns what Alexa should do next.
   propose(proposal) {
     const t0 = process.hrtime.bigint();
-    const contract = toContract(proposal), contractHash = hashOf(contract);
+    let contract;
+    try { contract = toContract(proposal); }
+    catch (e) { return { status: 'refused', say: e.message }; }
+    const contractHash = hashOf(contract);
     if (this.zones.size) {
       const zone = [...this.zones.values()][0];
       const r = this.log.append({ type: 'zone', decision: 'held', zone: zone.name, setBy: zone.setBy,
@@ -67,11 +76,37 @@ class Gate {
   confirm(pendingId, { said, speaker, source }) {
     const p = this.pending.get(pendingId);
     if (!p) return { status: 'expired' };
+    if (source !== 'user-utterance') {
+      this.pending.delete(pendingId);
+      return { status: 'rejected', say: 'Only a person in the household can approve that.' };
+    }
+    const saidNorm = norm(said);
+    const yes = YES.test(saidNorm) && !NEGATION.test(saidNorm);
+    if (!yes) {
+      this.pending.delete(pendingId);
+      const r = this.log.append({ ...p.base, decision: 'declined', approval: 'no', approver: speaker });
+      return { status: 'declined', receipt: r.seq };
+    }
+    if (this.zones.size) {
+      const zone = [...this.zones.values()][0];
+      this.log.append({ type: 'zone', decision: 'held', zone: zone.name, setBy: zone.setBy,
+        constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash,
+        contract: p.contract, contractHash: p.contractHash });
+      return { status: 'held', zone: zone.name, say: `I'm in a quiet zone right now, so I can't do that. I've written it down.` };
+    }
+    const recentCents = p.contract.kind === 'order' ? this.recentUnaskedSpend() : 0;
+    const ev = evaluate(p.contract, this.constitution, { recentCents });
+    if (ev.tier === TIER.REFUSE) {
+      this.pending.delete(pendingId);
+      const r = this.log.append({ type: 'decision', constitutionVersion: this.constitution.version,
+        constitutionHash: this.constitution.hash, contract: p.contract, contractHash: p.contractHash,
+        tier: ev.tier, recentCents, rules: ev.reasons.map(x => x.rule), decision: 'refused',
+        approval: null, approver: 'household rules' });
+      return { status: 'refused', say: `I won't ${describe(p.contract)}: ${ev.reasons.filter(x => x.rule === 'allergen').map(x => x.say).join('; ')}.`, receipt: r.seq };
+    }
     this.pending.delete(pendingId);
-    if (source !== 'user-utterance') return { status: 'rejected', say: 'Only a person in the household can approve that.' };
-    const yes = /^(yes|yeah|yep|sure|go ahead|do it|ok|okay)\b/i.test(norm(said));
-    const r = this.log.append({ ...p.base, decision: yes ? 'allowed' : 'declined', approval: yes ? 'yes' : 'no', approver: speaker });
-    return yes ? { status: 'approved', token: this.token(p.contractHash), receipt: r.seq } : { status: 'declined', receipt: r.seq };
+    const r = this.log.append({ ...p.base, decision: 'allowed', approval: 'yes', approver: speaker });
+    return { status: 'approved', token: this.token(p.contractHash), receipt: r.seq };
   }
 
   // Quiet Zones (Portable Constitution, venue-side): while a zone is active,
@@ -87,7 +122,12 @@ class Gate {
     const setBy = source === 'venue-signal' ? 'venue' : 'household';
     const base = { type: 'zone', zone: z, constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash };
     if (active) {
-      if (!this.zones.has(z)) { this.zones.set(z, { name: z, setBy }); this.log.append({ ...base, decision: 'entered', setBy }); }
+      const cur = this.zones.get(z);
+      if (!cur || (setBy === 'venue' && cur.setBy !== 'venue')) {
+        this.zones.set(z, { name: z, setBy });
+        this.log.append({ ...base, decision: 'entered', setBy });
+        if (this.onZone) this.onZone();
+      }
       return { status: 'entered', zone: z, say: `Quiet zone on for ${z}. I'll hold anything I'm asked to do until it lifts.` };
     }
     const cur = this.zones.get(z);
@@ -98,6 +138,7 @@ class Gate {
     }
     this.zones.delete(z);
     this.log.append({ ...base, decision: 'exited', setBy: cur.setBy });
+    if (this.onZone) this.onZone();
     return { status: 'exited', zone: z, say: `Quiet zone off for ${z}.` };
   }
 
@@ -129,11 +170,11 @@ class Gate {
     if (!p || !p.amendment) return { status: 'expired' };
     this.pending.delete(pendingId);
     const s = norm(said);
-    const ok = source === 'user-utterance' && (p.loosens ? /^yes,? change it\b/.test(s) : /^(yes|yeah|yep|sure|ok|okay)\b/.test(s));
+    const ok = source === 'user-utterance' && !NEGATION.test(s) && (p.loosens ? YES_LOOSEN.test(s) : YES_PLAIN.test(s));
     if (!ok) return { status: 'declined' };
     const old = this.constitution;
     const params = { ...old.params, ...p.amendment };
-    params.blockedAllergens = [...params.blockedAllergens].map(norm).sort();
+    params.blockedAllergens = expandAllergens(params.blockedAllergens);
     params.approvedContacts = [...params.approvedContacts].map(norm).sort();
     const body = { version: old.version + 1, starter: old.starter, params, prevHash: old.hash };
     const next = Object.freeze({ ...body, hash: hashOf(body) });

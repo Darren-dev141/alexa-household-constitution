@@ -16,15 +16,33 @@ function canon(v) {
 const sha = s => crypto.createHash('sha256').update(s).digest('hex');
 const hashOf = v => sha(canon(v));
 const norm = s => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+const ALLERGEN_CANON = {
+  peanut: ['peanuts'], peanuts: ['peanuts'],
+  'tree nut': ['tree nuts'], 'tree nuts': ['tree nuts'],
+  nut: ['peanuts', 'tree nuts'], nuts: ['peanuts', 'tree nuts'],
+  soy: ['soy'], soya: ['soy'], soybean: ['soy'], soybeans: ['soy'],
+};
+function expandAllergens(list) {
+  const out = [];
+  for (const raw of list || []) {
+    const n = norm(raw);
+    if (!n) continue;
+    out.push(...(ALLERGEN_CANON[n] || [n]));
+  }
+  return [...new Set(out)].sort();
+}
 
 // ---------- contract: the exact thing that will execute ----------
 function toContract(p) {
   if (p.kind === 'order') {
     const qty = p.qty ?? 1;
+    if (!Number.isInteger(qty) || qty < 1) throw new Error('quantity must be a whole number of at least 1');
+    if (!Number.isInteger(p.unitCents) || p.unitCents < 0) throw new Error('price must be zero or more cents');
+    if (!Array.isArray(p.allergens)) throw new Error('an order needs its allergen list');
     return {
       kind: 'order',
       sku: norm(p.sku), name: norm(p.name),
-      allergens: [...new Set((p.allergens || []).map(norm))].sort(),
+      allergens: expandAllergens(p.allergens),
       qty, unitCents: p.unitCents, totalCents: qty * p.unitCents,
       address: norm(p.address), deliveryDate: p.deliveryDate,
       requestedSku: norm(p.requestedSku ?? p.sku),
@@ -50,23 +68,41 @@ const SETUP_QUESTIONS = [
 const WORDS = { zero:0, one:1, two:2, three:3, four:4, five:5, six:6, seven:7, eight:8, nine:9, ten:10, eleven:11,
   twelve:12, thirteen:13, fourteen:14, fifteen:15, sixteen:16, seventeen:17, eighteen:18, nineteen:19, twenty:20,
   thirty:30, forty:40, fifty:50, sixty:60, seventy:70, eighty:80, ninety:90 };
-function parseSpokenMoney(s) {
-  const t = norm(s).replace(/[$,]/g, '');
-  const m = t.match(/^(\d+)(?:\.(\d{1,2}))?/);
-  if (m) return Number(m[1]) * 100 + Number((m[2] || '0').padEnd(2, '0'));
+function wordsToNumber(phrase) {
+  const p = norm(phrase);
   let total = 0, cur = 0, seen = false;
-  for (const w of t.split(/[\s-]+/)) {
-    if (w in WORDS) { cur += WORDS[w]; seen = true; }
+  for (const w of p.split(/[\s-]+/)) {
+    if (!w || w === 'and' || w === 'a') continue;
+    if (/^\d+$/.test(w)) { cur += Number(w); seen = true; }
+    else if (w in WORDS) { cur += WORDS[w]; seen = true; }
     else if (w === 'hundred') { cur = (cur || 1) * 100; seen = true; }
     else if (w === 'thousand') { total += (cur || 1) * 1000; cur = 0; seen = true; }
+    else if (w === 'million') { total += (cur || 1) * 1_000_000; cur = 0; seen = true; }
+    else throw new Error('could not understand amount: ' + phrase);
   }
-  if (!seen) throw new Error('could not understand amount: ' + s);
-  return (total + cur) * 100;
+  if (!seen) throw new Error('could not understand amount: ' + phrase);
+  return total + cur;
+}
+function parseSpokenMoney(s) {
+  const t = norm(s).replace(/[$,]/g, '');
+  if (!t) throw new Error('could not understand amount: ' + s);
+  let m = t.match(/^(\d+)(?:\.(\d{1,2}))?\s+cents?$/);
+  if (m && !m[2]) return Number(m[1]);
+  m = t.match(/^(.*?)\s+dollars?\s+and\s+(.*?)\s+cents?$/);
+  if (m) return wordsToNumber(m[1]) * 100 + wordsToNumber(m[2]);
+  m = t.match(/^(.*?)\s+dollars?$/);
+  if (m) return wordsToNumber(m[1]) * 100;
+  m = t.match(/^(.*?)\s+cents?$/);
+  if (m) return wordsToNumber(m[1]);
+  m = t.match(/^(\d+)(?:\.(\d{1,2}))?$/);
+  if (m) return Number(m[1]) * 100 + Number((m[2] || '0').padEnd(2, '0'));
+  return wordsToNumber(t) * 100;
 }
 function parseSpokenList(s) {
   const t = norm(s);
   if (!t || /^(none|no|nothing|nobody|skip)$/.test(t)) return [];
-  return t.split(/\s*(?:,|\band\b)\s*/).map(norm).filter(Boolean);
+  return t.split(/\s*(?:,|;|\/|&|\band\b|\bor\b|\bplus\b)\s*/)
+    .map(x => norm(x).replace(/^(?:no|please)\s+/, '')).filter(Boolean);
 }
 function setupConstitution(starter, answers = {}) {
   if (!STARTERS[starter]) throw new Error('unknown starter: ' + starter);
@@ -75,7 +111,7 @@ function setupConstitution(starter, answers = {}) {
     const a = answers[q.key];
     if (a !== undefined && !/^\s*skip\s*$/i.test(a)) params[q.key] = q.parse(a);
   }
-  params.blockedAllergens = params.blockedAllergens.map(norm).sort();
+  params.blockedAllergens = expandAllergens(params.blockedAllergens);
   params.approvedContacts = params.approvedContacts.map(norm).sort();
   const body = { version: 1, starter, params, prevHash: null };
   return Object.freeze({ ...body, hash: hashOf(body) });
@@ -112,9 +148,10 @@ const money = c => '$' + (c / 100).toFixed(2);
 
 // ---------- consumer-facing language: what / who / undo. No codes. ----------
 function describe(contract) {
-  return contract.kind === 'order'
-    ? `order ${contract.qty} × ${contract.name} for ${money(contract.totalCents)}, delivered ${contract.deliveryDate}`
-    : `send "${contract.body}" to ${contract.to}`;
+  if (contract.kind === 'order')
+    return `order ${contract.qty} × ${contract.name} for ${money(contract.totalCents)}, delivered ${contract.deliveryDate}`;
+  const body = String(contract.body).replace(/["«»\r\n]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return `send a message to ${contract.to} that says: «${body}»`;
 }
 function spokenPrompt(contract, ev) {
   return `I'm about to ${describe(contract)}. I'm checking because ${ev.reasons.map(r => r.say).join(' and ')}. Should I go ahead?`;
@@ -122,5 +159,5 @@ function spokenPrompt(contract, ev) {
 
 function verifyConstitution(c) { const { hash, ...body } = c || {}; return !!hash && hashOf(body) === hash; }
 
-module.exports = { verifyConstitution, canon, sha, hashOf, norm, toContract, STARTERS, SETUP_QUESTIONS, parseSpokenMoney,
+module.exports = { verifyConstitution, canon, sha, hashOf, norm, expandAllergens, toContract, STARTERS, SETUP_QUESTIONS, parseSpokenMoney,
   parseSpokenList, setupConstitution, TIER, evaluate, money, describe, spokenPrompt };

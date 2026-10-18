@@ -28,15 +28,49 @@ function createHome({ dataDir, ownerKey, vendor = new SandboxVendor(), address =
   vendor.address = address;
   const home = { log, vendor, sent: vendor.orders, gate: null, ownerKey, now, amendments: new Map(), heldActions: new Map(),
     exec: new Executor({ key, vendor: c => vendor.commit(c), log }) };
-  const save = () => fs.writeFileSync(stateFile, JSON.stringify({ address, current: home.gate.constitution.hash, versions: home.gate.versions }, null, 1));
+  const macOf = h => crypto.createHmac('sha256', key).update(h).digest('hex');
+  const altered = () => { throw new Error('household promises file was altered; refusing to start'); };
+  const promisesIntact = st => {
+    const versions = st.versions || {}, list = Object.values(versions);
+    if (!list.length || !versions[st.current]) altered();
+    for (const v of list) {
+      if (!verifyConstitution(v)) altered();
+      const expected = macOf(v.hash), mac = st.macs && st.macs[v.hash];
+      if (typeof mac !== 'string' || mac.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expected))) altered();
+    }
+    const pointed = new Set(list.map(v => v.prevHash).filter(Boolean));
+    const heads = list.filter(v => !pointed.has(v.hash));
+    if (heads.length !== 1 || heads[0].hash !== st.current) altered();
+    const seen = new Set();
+    let cur = versions[st.current];
+    while (cur) {
+      if (seen.has(cur.hash)) altered();
+      seen.add(cur.hash);
+      if (!cur.prevHash) break;
+      if (!versions[cur.prevHash]) altered();
+      cur = versions[cur.prevHash];
+    }
+    if (seen.size !== list.length) altered();
+    const applied = log.entries().filter(e => e.type === 'amendment' && e.decision === 'applied');
+    if (applied.length && applied[applied.length - 1].constitutionHash !== st.current) altered();
+  };
+  const save = () => {
+    const versions = home.gate.versions, macs = {};
+    for (const h of Object.keys(versions)) macs[h] = macOf(h);
+    fs.writeFileSync(stateFile, JSON.stringify({
+      address, current: home.gate.constitution.hash, versions, macs,
+      zones: [...home.gate.zones.entries()],
+    }, null, 1));
+  };
   if (fs.existsSync(stateFile)) { // restart: reload, and refuse to run on a tampered or broken chain
     const st = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-    for (const v of Object.values(st.versions)) if (!verifyConstitution(v)) throw new Error('household promises file was altered; refusing to start');
     const chk = log.verify(); if (!chk.ok) throw new Error('receipt log altered at entry ' + chk.at + '; refusing to start');
-    home.gate = new Gate({ constitution: st.versions[st.current], versions: st.versions, log, key, onAdopt: () => save() });
+    promisesIntact(st);
+    home.gate = new Gate({ constitution: st.versions[st.current], versions: st.versions, log, key,
+      zones: st.zones, onZone: () => save(), onAdopt: () => save() });
   }
   home.setup = (starter, answers) => {
-    home.gate = new Gate({ constitution: setupConstitution(starter, answers), log, key, onAdopt: () => save() });
+    home.gate = new Gate({ constitution: setupConstitution(starter, answers), log, key, onZone: () => save(), onAdopt: () => save() });
     save();
   };
   home.checkout = (quoteId, fallback) => quoteId ? vendor.finalize(quoteId) : fallback;
@@ -47,9 +81,14 @@ function createHome({ dataDir, ownerKey, vendor = new SandboxVendor(), address =
   home.approveHeld = (id, { approve, speaker }) => {
     const held = home.heldActions.get(id);
     if (!held) return { status: 'missing' };
-    home.heldActions.delete(id);
-    if (home.now() - held.at > OWNER_WAIT_MS) { home.gate.pending.delete(id); return { status: 'expired' }; }
+    if (home.now() - held.at > OWNER_WAIT_MS) {
+      home.heldActions.delete(id);
+      home.gate.pending.delete(id);
+      return { status: 'expired' };
+    }
     const r = home.gate.confirm(id, { said: approve ? 'yes' : 'no', speaker, source: 'user-utterance' });
+    if (r.status === 'held') return { status: 'held', say: r.say };
+    home.heldActions.delete(id);
     if (r.status !== 'approved') return { status: r.status };
     const done = home.exec.execute(home.checkout(held.quoteId, held.contract), r.token);
     return done.status === 'executed' ? { status: 'executed', say: "Done. Here's what I did: " + describe(held.contract) + '.' }
@@ -88,6 +127,8 @@ function buildMcp(home) {
     const draft = setupConstitution(a.home_type, answers); // validates; nothing saved yet
     // The household hears the promises read back and says yes; the assistant cannot set them up alone.
     if (!s.server.getClientCapabilities()?.elicitation) {
+      if (home.pendingSetup && home.now() - home.pendingSetup.at <= OWNER_WAIT_MS)
+        return text("Your home setup is already waiting for the person who runs your home to okay.");
       home.pendingSetup = { starter: a.home_type, answers, at: home.now() };
       return text("I've sent your home setup to the person who runs your home to okay.");
     }
@@ -97,6 +138,7 @@ function buildMcp(home) {
         requestedSchema: { type: 'object', properties: { go_ahead: { type: 'boolean', title: 'Keep these promises?' } }, required: ['go_ahead'] } });
     } catch { return text("I couldn't ask just now, so nothing was set up."); }
     if (!(answer.action === 'accept' && answer.content?.go_ahead === true)) return text("Okay, nothing is set up yet. We can try again whenever you like.");
+    if (home.gate) return text('Your home is already set up. You can change any promise just by asking.');
     home.setup(a.home_type, answers);
     return text(`All set. ${promisesText(home.gate.constitution)} You can change any of this just by asking.`);
   });
@@ -110,6 +152,7 @@ function buildMcp(home) {
     if (!home.gate) return needSetup();
     const q = home.vendor.quote(a.item, a.quantity);
     if (!q) return text("I couldn't find " + a.item + ' at the store.');
+    if (q.ambiguous) return text('Which one? I will not guess from "' + a.item + '".');
     return decide(q.line, q.quoteId);
   });
 
@@ -119,11 +162,13 @@ function buildMcp(home) {
 
   async function decide(p, quoteId) {
     const r = home.gate.propose(p);
-    if (r.status === 'refused') return text(r.say);
+    if (r.status === 'held' || r.status === 'refused') return text(r.say);
     if (r.status === 'confirm') {
       const held = home.gate.pending.get(r.pendingId);
       home.heldActions.set(r.pendingId, { contract: held.contract, why: held.why, quoteId, at: home.now() });
-      if (!s.server.getClientCapabilities()?.elicitation) // host can't ask the person: the decision-maker decides
+      const ownerOnly = held.contract.kind === 'order'
+        && held.contract.totalCents > 2 * home.gate.constitution.params.spendConfirmCents;
+      if (ownerOnly || !s.server.getClientCapabilities()?.elicitation)
         return text("I've sent that to the person who runs your home to okay. Nothing happens until they do.");
       let answer;
       try {
@@ -170,14 +215,30 @@ function buildMcp(home) {
   return s;
 }
 
+function localName(host) {
+  return String(host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+}
 function createApp(opts) {
   const home = createHome(opts);
   const app = express();
+  app.use((req, res, next) => {
+    if (req.path !== '/mcp') return next();
+    const host = localName(req.headers.host);
+    if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1')
+      return res.status(403).json({ jsonrpc: '2.0', error: { code: -32000, message: 'forbidden host' }, id: null });
+    if (req.headers.origin) {
+      let name = '';
+      try { name = new URL(req.headers.origin).hostname; } catch { /* foreign */ }
+      if (name !== '127.0.0.1' && name !== 'localhost' && name !== '::1')
+        return res.status(403).json({ jsonrpc: '2.0', error: { code: -32000, message: 'forbidden origin' }, id: null });
+    }
+    next();
+  });
   app.use(express.json());
-  const sessions = {};
+  const sessions = new Map();
   app.post('/mcp', async (req, res) => {
     const sid = req.get('mcp-session-id');
-    let t = sid && sessions[sid];
+    let t = sid && sessions.get(sid);
     if (!t) {
       if (sid) return res.status(404).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Session not found' }, id: null });
       if (!isInitializeRequest(req.body)) {
@@ -189,14 +250,14 @@ function createApp(opts) {
         await srv.connect(st);
         return st.handleRequest(req, res, req.body);
       }
-      t = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID(), onsessioninitialized: id => { sessions[id] = t; } });
-      t.onclose = () => { if (t.sessionId) delete sessions[t.sessionId]; };
+      t = new StreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID(), onsessioninitialized: id => { sessions.set(id, t); } });
+      t.onclose = () => { if (t.sessionId) sessions.delete(t.sessionId); };
       await buildMcp(home).connect(t);
     }
     await t.handleRequest(req, res, req.body);
   });
   const bySession = async (req, res) => {
-    const t = sessions[req.get('mcp-session-id')];
+    const t = sessions.get(req.get('mcp-session-id'));
     if (!t) return res.status(404).end();
     await t.handleRequest(req, res);
   };
@@ -262,7 +323,9 @@ function createApp(opts) {
   // the assistant cannot call it. In production the venue would hold its own
   // credential; tonight the owner key is the stand-in.
   app.post('/venue/zone', (req, res) => {
-    if (!owner(req, res)) return;
+    const k = String(req.get('x-owner-key') || '');
+    const ok = k.length === home.ownerKey.length && crypto.timingSafeEqual(Buffer.from(k), Buffer.from(home.ownerKey));
+    if (!ok) return res.status(401).end();
     if (!home.gate) return res.status(404).end();
     const { name, active } = req.body || {};
     res.json(home.gate.zoneEvent({ name, active: !!active, source: 'venue-signal' }));
@@ -274,6 +337,12 @@ function createApp(opts) {
     if (!home.amendments.delete(id)) return res.status(404).end();
     home.gate.pending.delete(id);
     res.json({ status: 'declined' });
+  });
+  app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    const parse = err.type === 'entity.parse.failed' || (err instanceof SyntaxError && err.status === 400);
+    res.status(parse ? 400 : 500).json({ jsonrpc: '2.0',
+      error: { code: parse ? -32700 : -32603, message: parse ? 'Parse error' : 'Internal error' }, id: null });
   });
   return { app, home };
 }
