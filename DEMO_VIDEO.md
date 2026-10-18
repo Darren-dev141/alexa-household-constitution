@@ -16,7 +16,7 @@ Source A is checked against `demo/transcript.txt`. Every on-screen line below is
 
 ## Pre-flight (5 minutes)
 
-1. Run `npm ci && npm test`. All 29 tests must pass.
+1. Run `npm ci && npm test`. All 55 tests must pass.
 2. Run `npm run demo`. It must end with `DEMO OK`.
 3. Terminal: font 20pt or larger, dark theme, about 100 columns, prompt shortened (`PS1='$ '`). Clear the scrollback.
 4. Browser for the phone page: open DevTools device mode at **390×844** (iPhone 12/13/14), or an actual phone on the same machine through a local-only connection. Do **not** use a public tunnel (README: no sign-in on `/mcp` yet).
@@ -34,10 +34,10 @@ VO = voice-over. OS = on-screen text. Times are targets.
 | 2 | 0:12–0:24 | Honesty card | "Here's what is real in this demo and what is simulated." | Real: MCP server, rule checks, receipt log. Simulated: Alexa+ host and voice, a sandbox store. |
 | 3 | 0:24–0:44 | A, scene 1: setup | "Setup is four everyday questions. The assistant reads the promises back, and nothing is kept until a person says yes." | Setup in everyday words |
 | 4 | 0:44–0:58 | A, scenes 2–3 | "Small things just happen. Medium things get done, then reported." | Small: quiet · Medium: told after |
-| 5 | 0:58–1:12 | A, scene 4 | "Splitting a big order into small ones doesn't dodge the ask. Today's orders count together." | $49.98 + $24.99 = $78.96 > $75 |
-| 6 | 1:12–1:24 | A, scene 5 | "Anything over the limit is asked first, at the store's real price. The assistant never sets the price." | Asked first, real price |
+| 5 | 0:58–1:12 | A, scene 4 | "Splitting a big order into small ones doesn't dodge the ask. Today's orders count together, and that goes to the person who runs the home." | $49.98 + $24.99 + $3.99 = $78.96 > $75 |
+| 6 | 1:12–1:24 | A, scene 5 | "Anything over the limit goes to the person who runs the home, at the store's real price. A yes on the device does not place it. The assistant never sets the price." | Owner sees $94.95 |
 | 7 | 1:24–1:38 | A, scene 6 | "The store swaps in almond milk. This family said no tree nuts. That's refused outright, and no one can say yes to it." | Never means never |
-| 8 | 1:38–1:52 | A, scene 7 | "The price goes up after the yes. Checkout re-reads the order, sees it changed, and stops before paying." | The yes was for $89.99, not $109.99 |
+| 8 | 1:38–1:52 | A, scene 7 | "The price goes up after the owner says yes. Checkout re-reads the order, sees it changed, and stops before paying." | The yes was for $89.99, not $109.99 |
 | 9 | 1:52–2:04 | A, scene 8 | "Could the assistant just approve itself? No. None of its tools means yes. The approval lives outside the assistant." | No "yes" tool exists |
 | 10 | 2:04–2:30 | B: split screen, terminal left, phone page right. A kid asks to raise the limit (A, scene 9, VO only), then the air fryer request appears on the phone **without a reload** with "Waiting because it costs $89.99, over your $75.00 ask-first limit." Tap **No**. | "Loosening a promise, or anything the device can't ask about, goes to the person who runs the home. Their phone shows what's waiting and why. They say no, and nothing is ordered." | Only the decision-maker can loosen a promise |
 | 11 | 2:30–2:44 | A, scene 10 + the `Receipts … chain intact` line | "Every decision is in a tamper-evident receipt log, and each one replays to the same answer." | Receipts: hash-chained, replayable |
@@ -45,7 +45,7 @@ VO = voice-over. OS = on-screen text. Times are targets.
 
 **Editing notes**
 - Shots 3–9 and 11 come from one paced take of `npm run demo:paced` (about 95 s raw). Trim the pauses so each scene fits its slot. Do not retype or reword any line. The spoken prompts are the decision interface, and changing their words calls for a version bump (see the design law in BURN_STATUS.md).
-- Highlight the `Device` line in each scene. That's the question the person actually hears.
+- Highlight the `Device` line when it appears (setup). Spend over the ask-first limit has no device yes; highlight the `Parent` line.
 - Shot 10 is a separate take of source B. Open the phone page **before** saying "Order the air fryer", so the request is seen arriving through the page's 3-second auto-refresh.
 - If B misbehaves on recording day, use `demo/screens/4-air-fryer.png` → `6-declined.png` as stills.
 

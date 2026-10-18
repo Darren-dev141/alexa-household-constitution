@@ -53,16 +53,22 @@ test('MCP: setup, quiet order, ask-first via the device prompt, refusal, store d
     assert.strictEqual(h.asked.length, 0, 'small stuff never interrupts');
 
     h.answers.push(true);
-    assert.match(await h.call('place_order', { item: 'oat milk', quantity: 5 }), /Here's what I did: order 5/);
-    assert.match(h.asked[0], /\$94\.95/, 'the person was asked, with the real price');
+    assert.match(await h.call('place_order', { item: 'oat milk', quantity: 5 }), /sent that to the person who runs your home/);
+    assert.strictEqual(h.asked.length, 0, 'over the ask-first limit is not decided on the device');
+    assert.strictEqual(home.sent.length, 1, 'a device yes does not buy over the ask-first limit');
+    const milk = await ownerGet(base, '/owner/pending');
+    assert.match(milk.actions[0].why.join(' '), /\$94\.95/, 'the owner sees the real price');
+    assert.strictEqual((await ownerPost(base, '/owner/approve/' + milk.actions[0].id)).status, 'executed');
     assert.strictEqual(home.sent.length, 2);
 
     h.answers.push(false);
-    assert.match(await h.call('place_order', { item: 'oat milk', quantity: 6 }), /Okay, I won't/);
-    assert.strictEqual(home.sent.length, 2, 'a no orders nothing');
+    assert.match(await h.call('place_order', { item: 'oat milk', quantity: 6 }), /sent that to the person who runs your home/);
+    assert.strictEqual(home.sent.length, 2, 'a device answer does not buy over the ask-first limit');
+    assert.strictEqual((await ownerPost(base, '/owner/decline/' + (await ownerGet(base, '/owner/pending')).actions[0].id)).status, 'declined');
 
-    assert.match(await h.call('place_order', { item: 'oat milk', quantity: 7 }), /Okay, I won't/, 'no answer counts as no');
+    assert.match(await h.call('place_order', { item: 'oat milk', quantity: 7 }), /sent that to the person who runs your home/);
     assert.strictEqual(home.sent.length, 2);
+    assert.strictEqual((await ownerPost(base, '/owner/decline/' + (await ownerGet(base, '/owner/pending')).actions[0].id)).status, 'declined');
 
     assert.match(await h.call('place_order', { item: 'peanut butter' }), /promised never/);
     home.vendor.setSubstitute('oat-milk-6', 'almond-milk-6'); // out of stock: store swaps in a tree-nut product
@@ -70,14 +76,14 @@ test('MCP: setup, quiet order, ask-first via the device prompt, refusal, store d
     home.vendor.setSubstitute('oat-milk-6', null);
     assert.strictEqual(home.sent.length, 2);
 
-    // The store raises the price while the person is being asked: the yes was for the old price, so nothing is charged.
-    const before = h.asked.length;
-    h.client.setRequestHandler(ElicitRequestSchema, async req => {
-      h.asked.push(req.params.message); home.vendor.setPrice('air-fryer', 10999);
-      return { action: 'accept', content: { go_ahead: true } };
-    });
-    assert.match(await h.call('place_order', { item: 'air fryer' }), /stopped before paying/);
-    assert.match(h.asked[before], /\$89\.99/);
+    // The store raises the price after the order is held: the owner's yes was for the old price, so nothing is charged.
+    assert.match(await h.call('place_order', { item: 'air fryer' }), /sent that to the person who runs your home/);
+    const fry = await ownerGet(base, '/owner/pending');
+    assert.match(fry.actions[0].why.join(' '), /\$89\.99/);
+    home.vendor.setPrice('air-fryer', 10999);
+    const drift = await ownerPost(base, '/owner/approve/' + fry.actions[0].id);
+    assert.strictEqual(drift.status, 'blocked');
+    assert.match(drift.say, /stopped before paying/);
     assert.strictEqual(home.sent.length, 2);
 
     assert.match(await h.call('change_promise', { ask_first_amount: '500' }), /sent that to the person who runs your home/);
@@ -206,8 +212,9 @@ test('splitting a big order into small ones still gets asked', async () => {
     h.asked.length = 0;
     for (let i = 0; i < 3; i++) assert.match(await h.call('place_order', { item: 'paper towels' }), /Done/); // 3 x $24.99 = $74.97
     assert.strictEqual(h.asked.length, 0);
-    assert.match(await h.call('place_order', { item: 'paper towels' }), /Okay, I won't/); // 4th would make $99.96: asked, no answer
-    assert.match(h.asked[0], /together with today's other orders it comes to \$99\.96/);
+    assert.match(await h.call('place_order', { item: 'paper towels' }), /sent that to the person who runs your home/); // 4th would make $99.96
+    assert.strictEqual(h.asked.length, 0, 'crossing the ask-first limit is not decided on the device');
+    assert.match((await ownerGet(base, '/owner/pending')).actions[0].why.join(' '), /together with today's other orders it comes to \$99\.96/);
     assert.strictEqual(home.sent.length, 3);
     for (const r of home.log.entries().filter(e => e.type === 'decision'))
       assert.ok(require('../src/receipts').replay(r, home.gate.versions).ok, 'replays with the recorded day total');
