@@ -7,6 +7,7 @@ An MCP server that lets an assistant act for a family while keeping a short list
 - Anything over the household's ask-first amount is put to a person first, with the real store price.
 - "Never" items, such as allergens, are refused outright.
 - A quiet zone holds every action until it lifts, including after a restart.
+- Guest Mode lets a visitor use the assistant for a short list of things the person who runs the home picked — and nothing else — and it turns itself off.
 
 ## 60-second quickstart
 
@@ -56,6 +57,7 @@ Dish soap, which would otherwise be ordered quietly, is held. The owner page say
 - **The assistant cannot set up the home or loosen a promise.** First-run setup is read back and confirmed the same way. Loosening a promise always goes to the person who runs the home. Tightening one applies right away.
 - **The store sets the price, product and allergens, not the assistant.** Checkout re-reads the order, and stops if anything changed after the yes.
 - **Splitting an order doesn't avoid the ask.** Orders made without asking in the last 24 hours count toward the ask-first amount.
+- **Guests get only what's on the list.** While Guest Mode is on, a guest can order only the items the person who runs the home put on the guest list, inside the household's own limits: no messages, no substitutions, nothing that would need an okay, and no hearing the household's promises or what it has done. Only the person who runs the home can turn Guest Mode on or off or change the list — from the same owner route as everything else; there is no tool for it. It always has an expiry and turns itself off, including after a restart, and every guest decision is receipted like everything else.
 - **Every decision is logged in a hash-chained, tamper-evident receipt log: edits to past entries are detected, though someone with disk access could rewrite the whole chain.** Each logged decision replays to the same outcome. A tampered promises file or log stops the server from starting.
 
 **Who approves what:** the device prompt can approve a substitution or a message, and the receipt records that. Spend over the ask-first limit, loosening a promise, first-run setup without a prompt, and other held orders need the person who runs the home. That route checks the owner key. The key is not written into receipts or error responses.

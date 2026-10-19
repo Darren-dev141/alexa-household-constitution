@@ -12,12 +12,40 @@ const YES_PLAIN = /^(yes|yeah|yep|sure|ok|okay)[.!]?$/;
 const YES_LOOSEN = /^yes,? change it[.!]?$/;
 const NEGATION = /\b(no|not|never|cancel|don't|dont)\b/;
 
+const GUEST_DEFAULT_MS = 4 * 3600_000;
+const listJoin = xs => xs.length < 2 ? (xs[0] || '') : xs.slice(0, -1).join(', ') + ' and ' + xs[xs.length - 1];
+// The guest-facing promise, in the same plain language as the household's.
+function guestText(g) {
+  if (!g) return 'Guest Mode is off, so only people who live here can use me.';
+  const at = new Date(g.until).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const can = g.allow.length ? `ask me to order ${listJoin(g.allow)}` : 'ask me general questions';
+  return `While Guest Mode is on, a guest can ${can} — and only within the same limits as everyone else. ` +
+    `Guests can't send messages, swap what they asked for, change the promises, or hear what this home has done or promised. ` +
+    `Guest Mode turns itself off at ${at}.`;
+}
+// Why a guest may not do this, or null when the guest may (the household's own
+// rules still apply on top: allergens refuse, tiers still tier).
+function guestDeny(contract, g, ev) {
+  if (contract.kind !== 'order')
+    return { rule: 'guest-messages', say: "Guests can't send messages. Only people who live here can ask me to do that." };
+  if (ev.tier === TIER.REFUSE) return null; // the refusal below says why (allergen)
+  if (!g.allow.includes(contract.sku) && !g.allow.includes(contract.name))
+    return { rule: 'guest-allowlist', say: `${contract.name} isn't on the list of things guests can order here.` };
+  if (contract.sku !== contract.requestedSku)
+    return { rule: 'guest-substitution', say: 'Guests can only get exactly what they asked for — no swaps.' };
+  if (ev.tier === TIER.CONFIRM)
+    return { rule: 'guest-confirm', say: "That needs an okay from a person who lives here, and a guest can't give it or get it. I've left it undone." };
+  return null;
+}
+
 class Gate {
-  constructor({ constitution, log, key, now = Date.now, versions, onAdopt, zones, onZone }) {
+  constructor({ constitution, log, key, now = Date.now, versions, onAdopt, zones, onZone, guest = null, onGuest }) {
     this.key = key; this.log = log; this.now = now;
     this.versions = { ...(versions || {}) }; this.pending = new Map();
     this.zones = new Map(zones || []);
     this.onZone = onZone;
+    this.guest = guest;
+    this.onGuest = onGuest;
     this.adopt(constitution);
     this.onAdopt = onAdopt;
   }
@@ -38,13 +66,57 @@ class Gate {
       && e.contract.kind === 'order' && Date.parse(e.ts) >= cutoff).reduce((a, e) => a + e.contract.totalCents, 0);
   }
 
-  // Agent proposes. Returns what Alexa should do next.
-  propose(proposal) {
+  // Guest Mode state, with the expiry applied. Discovering the expiry is
+  // receipted, the same way a zone change is.
+  guestActive() {
+    if (!this.guest) return null;
+    if (this.now() < this.guest.until) return this.guest;
+    const g = this.guest; this.guest = null;
+    this.log.append({ type: 'guest', decision: 'expired', until: g.until,
+      constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash });
+    if (this.onGuest) this.onGuest();
+    return null;
+  }
+
+  // Guest Mode: only the decision-maker (source 'owner' — the owner-key route,
+  // never an MCP tool) can turn it on, turn it off, or change the guest list.
+  // It always carries an expiry and turns itself off. Every change is receipted.
+  guestEvent({ active, durationMs, allow, source }) {
+    const base = { type: 'guest', constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash };
+    if (source !== 'owner') {
+      this.log.append({ ...base, decision: 'rejected', active: !!active, attemptedBy: source || 'unknown' });
+      return { status: 'rejected', say: 'Only the person who runs this home can change Guest Mode.' };
+    }
+    if (active) {
+      const list = [...new Set((allow || []).map(norm).filter(Boolean))].sort();
+      const until = this.now() + (Number.isFinite(durationMs) && durationMs > 0 ? durationMs : GUEST_DEFAULT_MS);
+      this.guest = { until, allow: list };
+      this.log.append({ ...base, decision: 'on', until, allow: list, setBy: 'decision-maker' });
+      if (this.onGuest) this.onGuest();
+      return { status: 'on', until, say: guestText(this.guest) };
+    }
+    if (!this.guestActive()) return { status: 'off', say: 'Guest Mode is already off.' };
+    this.guest = null;
+    this.log.append({ ...base, decision: 'off', setBy: 'decision-maker' });
+    if (this.onGuest) this.onGuest();
+    return { status: 'off', say: 'Guest Mode is off. Only people who live here can use me now.' };
+  }
+
+  // Agent proposes. Returns what Alexa should do next. With { actor: 'guest' }
+  // the proposal is a guest's: default-deny at this gate, never by prompt.
+  propose(proposal, { actor } = {}) {
     const t0 = process.hrtime.bigint();
     let contract;
     try { contract = toContract(proposal); }
     catch (e) { return { status: 'refused', say: e.message }; }
     const contractHash = hashOf(contract);
+    const guest = actor === 'guest' ? this.guestActive() : null;
+    if (actor === 'guest' && !guest) {
+      const r = this.log.append({ type: 'decision', decision: 'refused', approval: null, approver: 'household rules',
+        guest: true, rules: ['guest-mode-off'], tier: TIER.REFUSE, recentCents: 0,
+        constitutionVersion: this.constitution.version, constitutionHash: this.constitution.hash, contract, contractHash });
+      return { status: 'refused', receipt: r.seq, say: "Guest Mode isn't on, so I can only help people who live here." };
+    }
     if (this.zones.size) {
       const zone = [...this.zones.values()][0];
       const r = this.log.append({ type: 'zone', decision: 'held', zone: zone.name, setBy: zone.setBy,
@@ -57,7 +129,16 @@ class Gate {
     const latencyMs = Number(process.hrtime.bigint() - t0) / 1e6;
     const base = { type: 'decision', constitutionVersion: this.constitution.version,
       constitutionHash: this.constitution.hash, contract, contractHash, tier: ev.tier, recentCents,
-      rules: ev.reasons.map(r => r.rule), latencyUs: Math.round(latencyMs * 1000) };
+      rules: ev.reasons.map(r => r.rule), latencyUs: Math.round(latencyMs * 1000),
+      ...(actor === 'guest' ? { guest: true } : {}) };
+    if (actor === 'guest') {
+      const deny = guestDeny(contract, guest, ev);
+      if (deny) {
+        const r = this.log.append({ ...base, decision: 'refused', approval: null, approver: 'household rules',
+          rules: [...base.rules, deny.rule] });
+        return { status: 'refused', say: deny.say, receipt: r.seq };
+      }
+    }
     if (ev.tier === TIER.REFUSE) {
       const r = this.log.append({ ...base, decision: 'refused', approval: null, approver: 'household rules' });
       return { status: 'refused', say: `I won't ${describe(contract)}: ${ev.reasons.filter(x => x.rule === 'allergen').map(x => x.say).join('; ')}.`, receipt: r.seq };
@@ -210,4 +291,4 @@ class Executor {
   }
 }
 
-module.exports = { Gate, Executor, TOKEN_TTL_MS };
+module.exports = { Gate, Executor, TOKEN_TTL_MS, GUEST_DEFAULT_MS, guestText };

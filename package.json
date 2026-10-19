@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test test/slice.test.js test/mcp.test.js test/live.test.js test/core-independence.test.js test/canary.test.js test/zones.test.js test/redteam.test.js test/walk.test.js",
+    "test": "node --test test/slice.test.js test/mcp.test.js test/live.test.js test/core-independence.test.js test/canary.test.js test/zones.test.js test/redteam.test.js test/walk.test.js test/guest.test.js",
     "demo": "node demo/run.js",
     "demo:paced": "DEMO_PACE_MS=1800 node demo/run.js",
     "demo:live": "node demo/live.js",

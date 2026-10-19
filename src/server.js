@@ -18,7 +18,7 @@ const { setupConstitution, SETUP_QUESTIONS, STARTERS, money, describe, verifyCon
 const OWNER_WAIT_MS = 30 * 60_000;
 const { SandboxVendor } = require('./vendor');
 const OWNER_PAGE = require('./owner-page');
-const { Gate, Executor } = require('./gate');
+const { Gate, Executor, guestText } = require('./gate');
 const { ReceiptLog, tuningSuggestions } = require('./receipts');
 
 function createHome({ dataDir, ownerKey, vendor = new SandboxVendor(), address = '12 Elm St', now = Date.now }) {
@@ -62,6 +62,7 @@ function createHome({ dataDir, ownerKey, vendor = new SandboxVendor(), address =
     fs.writeFileSync(stateFile, JSON.stringify({
       address, current: home.gate.constitution.hash, versions, macs,
       zones: [...home.gate.zones.entries()],
+      guest: home.gate.guest,
     }, null, 1));
   };
   if (fs.existsSync(stateFile)) { // restart: reload, and refuse to run on a tampered or broken chain
@@ -69,10 +70,10 @@ function createHome({ dataDir, ownerKey, vendor = new SandboxVendor(), address =
     const chk = log.verify(); if (!chk.ok) throw new Error('receipt log altered at entry ' + chk.at + '; refusing to start');
     promisesIntact(st);
     home.gate = new Gate({ constitution: st.versions[st.current], versions: st.versions, log, key,
-      zones: st.zones, onZone: () => save(), onAdopt: () => save() });
+      zones: st.zones, guest: st.guest || null, onZone: () => save(), onAdopt: () => save(), onGuest: () => save() });
   }
   home.setup = (starter, answers) => {
-    home.gate = new Gate({ constitution: setupConstitution(starter, answers), log, key, onZone: () => save(), onAdopt: () => save() });
+    home.gate = new Gate({ constitution: setupConstitution(starter, answers), log, key, onZone: () => save(), onAdopt: () => save(), onGuest: () => save() });
     save();
   };
   home.checkout = (quoteId, fallback) => quoteId ? vendor.finalize(quoteId) : fallback;
@@ -145,25 +146,29 @@ function buildMcp(home) {
     return text(`All set. ${promisesText(home.gate.constitution)} You can change any of this just by asking.`);
   });
 
-  s.registerTool('read_promises', { description: 'Say back what the assistant has promised this home.',
-    annotations: { readOnlyHint: true } }, async () => home.gate ? text(promisesText(home.gate.constitution)) : needSetup());
+  // `guest: true` means the host says the person asking is a guest while Guest
+  // Mode is on. The flag can only restrict — the gate decides what a guest may
+  // do, and a guest never hears the household's own promises or history.
+  s.registerTool('read_promises', { description: 'Say back what the assistant has promised this home. With guest=true, say back only the guest promise.',
+    inputSchema: { guest: z.boolean().optional() }, annotations: { readOnlyHint: true } },
+  async a => !home.gate ? needSetup() : a.guest ? text(guestText(home.gate.guestActive())) : text(promisesText(home.gate.constitution)));
 
   s.registerTool('place_order', { description: 'Order something for the home. Say the item as the person said it and how many. The store sets the price.',
-    inputSchema: { item: z.string(), quantity: z.number().int().min(1).max(50).default(1) }, annotations: { destructiveHint: true } },
+    inputSchema: { item: z.string(), quantity: z.number().int().min(1).max(50).default(1), guest: z.boolean().optional() }, annotations: { destructiveHint: true } },
   async a => {
     if (!home.gate) return needSetup();
     const q = home.vendor.quote(a.item, a.quantity);
     if (!q) return text("I couldn't find " + a.item + ' at the store.');
     if (q.ambiguous) return text('Which one? I will not guess from "' + a.item + '".');
-    return decide(q.line, q.quoteId);
+    return decide(q.line, q.quoteId, a.guest);
   });
 
   s.registerTool('send_message', { description: 'Send a message for the household.',
-    inputSchema: { to: z.string(), body: z.string() }, annotations: { destructiveHint: true } },
-  async a => home.gate ? decide({ kind: 'message', to: a.to, body: a.body }) : needSetup());
+    inputSchema: { to: z.string(), body: z.string(), guest: z.boolean().optional() }, annotations: { destructiveHint: true } },
+  async a => home.gate ? decide({ kind: 'message', to: a.to, body: a.body }, undefined, a.guest) : needSetup());
 
-  async function decide(p, quoteId) {
-    const r = home.gate.propose(p);
+  async function decide(p, quoteId, guest) {
+    const r = home.gate.propose(p, guest ? { actor: 'guest' } : {});
     if (r.status === 'held' || r.status === 'refused') return text(r.say);
     if (r.status === 'confirm') {
       const held = home.gate.pending.get(r.pendingId);
@@ -206,7 +211,8 @@ function buildMcp(home) {
   });
 
   s.registerTool('what_did_you_do', { description: "Say back recent actions and any suggestion from repeated yeses.",
-    annotations: { readOnlyHint: true } }, async () => {
+    inputSchema: { guest: z.boolean().optional() }, annotations: { readOnlyHint: true } }, async a => {
+    if (a.guest) return text("That's this home's own business — I only share it with people who live here.");
     const es = home.log.entries();
     const done = es.filter(e => e.type === 'execution' && e.decision === 'executed').slice(-5)
       .map(e => describe(e.contract).replace(/^order /, 'ordered ').replace(/^send /, 'sent '));
@@ -293,7 +299,17 @@ function createApp(opts) {
       changes: [...home.amendments.entries()].filter(([, a]) => fresh(a.at)).map(([id, a]) => ({ id, say: sayChanges(a.changes), changes: a.changes })),
       actions: [...home.heldActions.entries()].filter(([, h]) => fresh(h.at)).map(([id, h]) => ({ id, what: describe(h.contract), why: h.why || [] })),
       zones: home.gate ? [...home.gate.zones.values()].map(z => ({ name: z.name, setBy: z.setBy })) : [],
+      guest: home.gate && home.gate.guestActive() ? { until: home.gate.guest.until, allow: home.gate.guest.allow } : null,
     });
+  });
+  // Guest Mode: decision-maker only, like everything else on this route. NOT an
+  // MCP tool — the assistant cannot turn it on, off, or widen the guest list.
+  app.post('/owner/guest', (req, res) => {
+    if (!owner(req, res)) return;
+    if (!home.gate) return res.status(404).end();
+    const { active, hours, allow } = req.body || {};
+    const durationMs = hours != null && Number.isFinite(Number(hours)) ? Number(hours) * 3600_000 : undefined;
+    res.json(home.gate.guestEvent({ active: !!active, durationMs, allow, source: 'owner' }));
   });
   app.post('/owner/approve-setup', (req, res) => {
     if (!owner(req, res)) return;
